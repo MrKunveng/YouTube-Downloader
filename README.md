@@ -28,6 +28,10 @@ Built with Python using:
 - 🛠️ Error handling and input validation
 
 ## Installation
+Install FFmpeg (required for audio conversion):
+Windows: Download from FFmpeg Official Site
+macOS: brew install ffmpeg
+Linux: sudo apt install ffmpeg
 
 1. **Clone the repository**
    ```bash
