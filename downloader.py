@@ -20,10 +20,11 @@ def get_downloads_folder() -> Path:
                 downloads_path = winreg.QueryValueEx(key, downloads_guid)[0]
             return Path(downloads_path)
         else:
-            return Path.home() / "Downloads"
+            # Ensure we're using the user's home directory Downloads folder
+            return Path.home() / "Downloads" / "YouTube Downloads"
     except Exception as e:
         logger.warning(f"Could not get Downloads folder: {e}")
-        return Path.home() / "Downloads"
+        return Path.home() / "Downloads" / "YouTube Downloads"
 
 def create_download_options(url: str, output_path: Path, download_type: str, quality: int = None) -> dict:
     """Create options for yt-dlp."""
@@ -65,7 +66,20 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
     try:
         # Convert to Path object and create directory
         output_path = Path(output_path).resolve()
-        output_path.mkdir(parents=True, exist_ok=True)
+        
+        # Ensure the path is within user's home directory
+        if not str(output_path).startswith(str(Path.home())):
+            output_path = Path.home() / "Downloads" / "YouTube Downloads"
+            st.warning(f"⚠️ Using default download location: {output_path}")
+        
+        # Create directory with proper permissions
+        try:
+            output_path.mkdir(parents=True, exist_ok=True, mode=0o755)
+        except PermissionError:
+            # Fallback to Downloads folder if permission denied
+            output_path = Path.home() / "Downloads" / "YouTube Downloads"
+            output_path.mkdir(parents=True, exist_ok=True, mode=0o755)
+            st.warning(f"⚠️ Permission denied. Using: {output_path}")
         
         # Create progress indicators
         progress_bar = st.progress(0)
@@ -155,6 +169,17 @@ def get_folder_mac():
     # Final fallback to default Downloads folder
     return str(Path.home() / "Downloads")
 
+def validate_path(path: str) -> Path:
+    """Validate and return a safe path for downloads."""
+    try:
+        path = Path(path).resolve()
+        # Ensure path is within user's home directory
+        if not str(path).startswith(str(Path.home())):
+            path = Path.home() / "Downloads" / "YouTube Downloads"
+        return path
+    except Exception:
+        return Path.home() / "Downloads" / "YouTube Downloads"
+
 def main():
     st.set_page_config(page_title="YouTube Downloader", page_icon="🎥")
     
@@ -183,13 +208,15 @@ def main():
         quality = None
     
     # Get default download path and add folder selection
-    default_path = str(get_downloads_folder() / "YouTube Downloads")
+    default_path = str(get_downloads_folder())
     
     # Create two columns for path input and folder selection
     path_col, button_col = st.columns([3, 1])
     
     with path_col:
         output_directory = st.text_input("📁 Save to:", value=default_path)
+        # Validate the input path
+        output_directory = str(validate_path(output_directory))
     
     with button_col:
         if st.button("📂 Choose Folder"):
@@ -198,33 +225,37 @@ def main():
                     import tkinter as tk
                     from tkinter import filedialog
                     root = tk.Tk()
-                    root.withdraw()  # Hide the main window
-                    root.wm_attributes('-topmost', 1)  # Bring the dialog to front
-                    folder_path = filedialog.askdirectory()
-                    if folder_path:  # If a folder was selected
-                        output_directory = folder_path
-                        st.session_state['output_directory'] = folder_path
+                    root.withdraw()
+                    root.wm_attributes('-topmost', 1)
+                    folder_path = filedialog.askdirectory(
+                        initialdir=str(Path.home() / "Downloads")
+                    )
+                    if folder_path:
+                        output_directory = str(validate_path(folder_path))
+                        st.session_state['output_directory'] = output_directory
                         st.experimental_rerun()
                 elif platform.system() == "Darwin":  # macOS
                     folder_path = get_folder_mac()
                     if folder_path:
-                        st.session_state['output_directory'] = folder_path
+                        output_directory = str(validate_path(folder_path))
+                        st.session_state['output_directory'] = output_directory
                         st.experimental_rerun()
                 else:  # Linux
-                    # Use zenity for Linux folder selection
                     folder_path = os.popen('zenity --file-selection --directory --title="Select Download Folder"').read().strip()
                     if folder_path:
-                        output_directory = folder_path
-                        st.session_state['output_directory'] = folder_path
+                        output_directory = str(validate_path(folder_path))
+                        st.session_state['output_directory'] = output_directory
                         st.experimental_rerun()
             except Exception as e:
                 st.error(f"Could not open folder dialog: {e}")
+                logger.error(f"Folder dialog error: {e}")
     
     # Use saved directory from session state if available
     if 'output_directory' in st.session_state:
         output_directory = st.session_state['output_directory']
     
-    # Show current save location
+    # Show current save location with path validation
+    output_directory = str(validate_path(output_directory))
     st.info(f"📂 Current save location: {output_directory}")
     
     # Download button
