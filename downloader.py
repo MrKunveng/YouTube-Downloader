@@ -64,28 +64,53 @@ def create_download_options(url: str, output_path: Path, download_type: str, qua
 def download_content(url: str, output_path: str, download_type: str = 'video', quality: int = None):
     """Download video or audio content."""
     try:
-        # Convert to Path object and create directory
-        output_path = Path(output_path).resolve()
-        
-        # Ensure the path is within user's home directory
-        if not str(output_path).startswith(str(Path.home())):
-            output_path = Path.home() / "Downloads" / "YouTube Downloads"
-            st.warning(f"⚠️ Using default download location: {output_path}")
+        # Convert to Path object and ensure it's absolute
+        output_path = Path(output_path).expanduser().resolve()
         
         # Create directory with proper permissions
         try:
-            output_path.mkdir(parents=True, exist_ok=True, mode=0o755)
-        except PermissionError:
-            # Fallback to Downloads folder if permission denied
+            output_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Created directory: {output_path}")
+        except Exception as e:
+            # If we can't create the specified directory, use Downloads folder
             output_path = Path.home() / "Downloads" / "YouTube Downloads"
-            output_path.mkdir(parents=True, exist_ok=True, mode=0o755)
-            st.warning(f"⚠️ Permission denied. Using: {output_path}")
-        
-        # Create progress indicators
+            output_path.mkdir(parents=True, exist_ok=True)
+            st.warning(f"⚠️ Using alternative location: {output_path}")
+            logger.warning(f"Using alternative directory: {output_path}, Original error: {e}")
+
+        # Configure yt-dlp options
+        ydl_opts = {
+            'format': 'bestaudio/best' if download_type == 'audio' else 'best',
+            'outtmpl': str(output_path / '%(title)s.%(ext)s'),
+            'quiet': False,
+            'no_warnings': False,
+            'progress': True,
+            'prefer_ffmpeg': True,
+            'ffmpeg_location': 'ffmpeg',  # Ensure ffmpeg is in PATH
+        }
+
+        # Add format-specific options
+        if download_type == 'audio':
+            ydl_opts.update({
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+            })
+        elif quality:
+            ydl_opts.update({
+                'format': f'bestvideo[height<={quality}][ext=mp4]+bestaudio[ext=m4a]/best[height<={quality}]',
+                'merge_output_format': 'mp4',
+            })
+
+        # Progress tracking
         progress_bar = st.progress(0)
         status_text = st.empty()
+        downloaded_file = None
 
         def progress_hook(d):
+            nonlocal downloaded_file
             if d['status'] == 'downloading':
                 try:
                     total = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
@@ -98,39 +123,36 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                 except Exception as e:
                     logger.warning(f"Progress calculation error: {e}")
             elif d['status'] == 'finished':
-                filename = os.path.basename(d.get('filename', ''))
+                downloaded_file = d.get('filename', '')
+                filename = os.path.basename(downloaded_file)
                 status_text.text(f"✅ Completed: {filename}")
                 progress_bar.progress(1.0)
 
-        # Get download options
-        ydl_opts = create_download_options(url, output_path, download_type, quality)
         ydl_opts['progress_hooks'] = [progress_hook]
 
         # Perform download
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # First get video info
-            info = ydl.extract_info(url, download=False)
-            title = info.get('title', 'Unknown')
-            st.write(f"📥 Starting download for: {title}")
-            
-            # Then download
-            error_code = ydl.download([url])
-            
-            if error_code != 0:
-                raise Exception(f"Download failed with error code: {error_code}")
+            try:
+                # Get video info first
+                info = ydl.extract_info(url, download=False)
+                title = info.get('title', 'Unknown')
+                st.write(f"📥 Starting download for: {title}")
+                
+                # Perform the download
+                ydl.download([url])
+                
+                # Verify the download
+                if downloaded_file and os.path.exists(downloaded_file):
+                    file_size = os.path.getsize(downloaded_file) / (1024 * 1024)  # Convert to MB
+                    st.success(f"✅ Successfully downloaded: {os.path.basename(downloaded_file)} ({file_size:.1f} MB)")
+                    st.info(f"📂 Saved to: {output_path}")
+                    return True
+                else:
+                    raise Exception("File was not saved correctly")
 
-        # Verify download
-        downloaded_files = list(output_path.glob(f"{title}.*"))
-        if downloaded_files:
-            st.success(f"✅ Successfully downloaded to: {output_path}")
-            # Show file details
-            with st.expander("Show file details"):
-                for file in downloaded_files:
-                    size = file.stat().st_size / (1024 * 1024)  # Convert to MB
-                    st.write(f"📁 {file.name} ({size:.1f} MB)")
-            return True
-        else:
-            raise Exception("No files were downloaded")
+            except Exception as e:
+                logger.error(f"Download error: {e}")
+                raise
 
     except Exception as e:
         st.error(f"❌ Download failed: {str(e)}")
@@ -263,21 +285,33 @@ def main():
         if not youtube_url:
             st.error("⚠️ Please enter a YouTube URL")
         else:
-            with st.spinner("Processing download..."):
-                success = download_content(youtube_url, output_directory, download_type, quality)
+            try:
+                with st.spinner("Processing download..."):
+                    success = download_content(youtube_url, output_directory, download_type, quality)
+                
+                if success:
+                    # Show open folder button in a new container
+                    col1, col2 = st.columns([1, 3])
+                    with col1:
+                        if st.button("📂 Open Folder"):
+                            try:
+                                if platform.system() == "Windows":
+                                    os.startfile(output_directory)
+                                elif platform.system() == "Darwin":  # macOS
+                                    os.system(f"open '{output_directory}'")
+                                else:  # Linux
+                                    os.system(f"xdg-open '{output_directory}'")
+                            except Exception as e:
+                                st.error(f"Could not open folder: {e}")
+                    
+                    # Add download another button
+                    with col2:
+                        if st.button("⬇️ Download Another"):
+                            st.experimental_rerun()
             
-            if success:
-                # Show open folder button
-                if st.button("📂 Open Downloads Folder"):
-                    try:
-                        if platform.system() == "Windows":
-                            os.startfile(output_directory)
-                        elif platform.system() == "Darwin":  # macOS
-                            os.system(f"open '{output_directory}'")
-                        else:  # Linux
-                            os.system(f"xdg-open '{output_directory}'")
-                    except Exception as e:
-                        st.error(f"Could not open folder: {e}")
+            except Exception as e:
+                st.error(f"❌ Download failed: {str(e)}")
+                logger.error(f"Download error: {e}")
 
 if __name__ == "__main__":
     main()
