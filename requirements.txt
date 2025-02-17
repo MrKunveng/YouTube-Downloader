@@ -1,5 +1,0 @@
-streamlit
-yt-dlp
-python-dotenv       # Optional for environment variables
-ffmpeg-python       # FFmpeg wrapper
-pyyaml              # For yt-dlp metadata handling
