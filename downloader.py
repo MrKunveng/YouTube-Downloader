@@ -4,6 +4,7 @@ import streamlit as st
 from typing import Optional, Literal
 import logging
 from pathlib import Path
+import platform
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -14,9 +15,22 @@ SUPPORTED_DOWNLOAD_TYPES = Literal["video", "audio"]
 DEFAULT_AUDIO_QUALITY = "192"
 VALID_VIDEO_QUALITIES = [None, 240, 360, 480, 720, 1080, 1440, 2160]
 
+def get_downloads_folder() -> Path:
+    """Get the system's Downloads folder path."""
+    if platform.system() == "Windows":
+        import winreg
+        sub_key = r'SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders'
+        downloads_guid = '{374DE290-123F-4565-9164-39C4925E467B}'
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, sub_key) as key:
+            downloads_path = winreg.QueryValueEx(key, downloads_guid)[0]
+        return Path(downloads_path)
+    else:
+        return Path.home() / "Downloads"
+
 class YouTubeDownloader:
-    def __init__(self, output_path: str):
-        self.output_path = Path(output_path)
+    def __init__(self, output_path: Optional[str] = None):
+        """Initialize downloader with optional output path."""
+        self.output_path = Path(output_path) if output_path else get_downloads_folder() / "YouTube Downloads"
         self._ensure_output_directory()
     
     def _ensure_output_directory(self) -> None:
@@ -110,13 +124,19 @@ def create_streamlit_ui():
             )
         
         with col2:
+            # Get default downloads path
+            default_path = str(get_downloads_folder() / "YouTube Downloads")
             output_directory = st.text_input(
                 "📁 Output Directory:",
-                value=os.getcwd()
+                value=default_path,
+                help="Files will be saved in your Downloads folder by default"
             )
             quality = (st.selectbox("🎬 Video Quality:", VALID_VIDEO_QUALITIES,
                                   format_func=lambda x: f"{x}p" if x else "Best")
                       if download_type == "video" else None)
+        
+        # Add information about save location
+        st.info(f"📂 Files will be saved to: {output_directory}")
         
         submit = st.form_submit_button("⬇️ Download")
         
@@ -127,6 +147,18 @@ def create_streamlit_ui():
             
             downloader = YouTubeDownloader(output_directory)
             downloader.download(youtube_url, download_type, quality)
+
+            # Show open folder button after successful download
+            if st.button("📂 Open Downloads Folder"):
+                try:
+                    if platform.system() == "Windows":
+                        os.startfile(output_directory)
+                    elif platform.system() == "Darwin":  # macOS
+                        os.system(f"open {output_directory}")
+                    else:  # Linux
+                        os.system(f"xdg-open {output_directory}")
+                except Exception as e:
+                    st.error(f"Could not open folder: {e}")
 
 if __name__ == "__main__":
     create_streamlit_ui()
