@@ -123,6 +123,38 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
         logger.error(f"Download error: {e}")
         return False
 
+def get_folder_mac():
+    """Get folder path on macOS using multiple methods."""
+    try:
+        # First try AppleScript
+        folder_path = os.popen('osascript -e "choose folder with prompt "Select Download Folder:""').read().strip()
+        if folder_path:
+            # Convert macOS path format to regular path
+            folder_path = folder_path.replace(':', '/')
+            if folder_path.startswith('Macintosh HD/'):
+                folder_path = '/' + folder_path[13:]
+            return folder_path
+    except:
+        pass
+    
+    try:
+        # Fallback to PyQt5
+        from PyQt5.QtWidgets import QApplication, QFileDialog
+        app = QApplication([])
+        folder_path = QFileDialog.getExistingDirectory(
+            None, 
+            "Select Download Folder",
+            str(Path.home()),
+            QFileDialog.ShowDirsOnly
+        )
+        if folder_path:
+            return folder_path
+    except:
+        pass
+    
+    # Final fallback to default Downloads folder
+    return str(Path.home() / "Downloads")
+
 def main():
     st.set_page_config(page_title="YouTube Downloader", page_icon="🎥")
     
@@ -171,19 +203,20 @@ def main():
                     folder_path = filedialog.askdirectory()
                     if folder_path:  # If a folder was selected
                         output_directory = folder_path
-                        st.session_state['output_directory'] = folder_path  # Save to session state
-                        st.experimental_rerun()  # Rerun the app to update the text input
+                        st.session_state['output_directory'] = folder_path
+                        st.experimental_rerun()
                 elif platform.system() == "Darwin":  # macOS
-                    folder_path = os.popen('osascript -e "choose folder with prompt "Select Download Folder:""').read().strip()
+                    folder_path = get_folder_mac()
                     if folder_path:
-                        # Convert macOS path format to regular path
-                        output_directory = folder_path.replace(':', '/')
-                        if output_directory.startswith('Macintosh HD/'):
-                            output_directory = '/' + output_directory[13:]
-                        st.session_state['output_directory'] = output_directory
+                        st.session_state['output_directory'] = folder_path
                         st.experimental_rerun()
                 else:  # Linux
-                    st.warning("Manual folder selection is not available on Linux. Please enter the path manually.")
+                    # Use zenity for Linux folder selection
+                    folder_path = os.popen('zenity --file-selection --directory --title="Select Download Folder"').read().strip()
+                    if folder_path:
+                        output_directory = folder_path
+                        st.session_state['output_directory'] = folder_path
+                        st.experimental_rerun()
             except Exception as e:
                 st.error(f"Could not open folder dialog: {e}")
     
