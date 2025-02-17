@@ -3,9 +3,9 @@ import yt_dlp
 import streamlit as st
 from pathlib import Path
 import platform
-
-# Configure basic logging
 import logging
+
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -21,44 +21,53 @@ def get_downloads_folder() -> Path:
             return Path(downloads_path)
         else:
             return Path.home() / "Downloads"
-    except:
+    except Exception as e:
+        logger.warning(f"Could not get Downloads folder: {e}")
         return Path.home() / "Downloads"
+
+def create_download_options(url: str, output_path: Path, download_type: str, quality: int = None) -> dict:
+    """Create options for yt-dlp."""
+    # Base options
+    options = {
+        'outtmpl': str(output_path / '%(title)s.%(ext)s'),
+        'ignoreerrors': True,
+        'quiet': False,
+        'no_warnings': False,
+        'verbose': True
+    }
+
+    # Format selection based on download type
+    if download_type == 'audio':
+        options.update({
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+        })
+    else:  # video
+        if quality:
+            options.update({
+                'format': f'bestvideo[height<={quality}][ext=mp4]+bestaudio[ext=m4a]/best[height<={quality}]',
+                'merge_output_format': 'mp4'
+            })
+        else:
+            options.update({
+                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
+                'merge_output_format': 'mp4'
+            })
+
+    return options
 
 def download_content(url: str, output_path: str, download_type: str = 'video', quality: int = None):
     """Download video or audio content."""
     try:
-        # Ensure output directory exists
-        output_path = Path(output_path)
+        # Convert to Path object and create directory
+        output_path = Path(output_path).resolve()
         output_path.mkdir(parents=True, exist_ok=True)
         
-        # Configure yt-dlp options
-        ydl_opts = {
-            'outtmpl': str(output_path / '%(title)s.%(ext)s'),
-            'ignoreerrors': True,
-            'quiet': False
-        }
-
-        # Configure format based on download type
-        if download_type == 'audio':
-            ydl_opts.update({
-                'format': 'bestaudio/best',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }],
-            })
-        else:  # video
-            if quality:
-                ydl_opts.update({
-                    'format': f'bestvideo[height<={quality}]+bestaudio/best[height<={quality}]',
-                })
-            else:
-                ydl_opts.update({
-                    'format': 'bestvideo+bestaudio/best',
-                })
-
-        # Add progress hook
+        # Create progress indicators
         progress_bar = st.progress(0)
         status_text = st.empty()
 
@@ -68,56 +77,143 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                     total = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
                     downloaded = d.get('downloaded_bytes', 0)
                     if total:
-                        progress = downloaded / total
+                        progress = min(downloaded / total, 1.0)
                         progress_bar.progress(progress)
-                        status_text.text(f"Downloading: {d.get('filename', '').split('/')[-1]}")
-                except:
-                    pass
+                        filename = os.path.basename(d.get('filename', ''))
+                        status_text.text(f"⏳ Downloading: {filename}")
+                except Exception as e:
+                    logger.warning(f"Progress calculation error: {e}")
             elif d['status'] == 'finished':
-                status_text.text(f"Download completed: {d.get('filename', '').split('/')[-1]}")
+                filename = os.path.basename(d.get('filename', ''))
+                status_text.text(f"✅ Completed: {filename}")
                 progress_bar.progress(1.0)
 
+        # Get download options
+        ydl_opts = create_download_options(url, output_path, download_type, quality)
         ydl_opts['progress_hooks'] = [progress_hook]
 
         # Perform download
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # First get video info
             info = ydl.extract_info(url, download=False)
             title = info.get('title', 'Unknown')
-            st.write(f"Starting download for: {title}")
-            ydl.download([url])
+            st.write(f"📥 Starting download for: {title}")
             
-        st.success(f"✅ Successfully downloaded to: {output_path}")
-        return True
+            # Then download
+            error_code = ydl.download([url])
+            
+            if error_code != 0:
+                raise Exception(f"Download failed with error code: {error_code}")
+
+        # Verify download
+        downloaded_files = list(output_path.glob(f"{title}.*"))
+        if downloaded_files:
+            st.success(f"✅ Successfully downloaded to: {output_path}")
+            # Show file details
+            with st.expander("Show file details"):
+                for file in downloaded_files:
+                    size = file.stat().st_size / (1024 * 1024)  # Convert to MB
+                    st.write(f"📁 {file.name} ({size:.1f} MB)")
+            return True
+        else:
+            raise Exception("No files were downloaded")
 
     except Exception as e:
         st.error(f"❌ Download failed: {str(e)}")
         logger.error(f"Download error: {e}")
         return False
 
-# Streamlit UI
-st.set_page_config(page_title="YouTube Downloader", page_icon="🎥")
-st.title("🎥 YouTube Downloader")
-
-# Input fields
-youtube_url = st.text_input("Enter YouTube URL:")
-download_type = st.selectbox("Select Type:", ["video", "audio"])
-quality_options = [None, 240, 360, 480, 720, 1080]
-quality = st.selectbox("Select Quality:", quality_options, 
-                      format_func=lambda x: "Best" if x is None else f"{x}p") if download_type == "video" else None
-
-# Get default download path
-default_path = str(get_downloads_folder() / "YouTube Downloads")
-output_directory = st.text_input("Save to:", value=default_path)
-
-# Download button
-if st.button("Download"):
-    if not youtube_url:
-        st.error("Please enter a YouTube URL")
+def main():
+    st.set_page_config(page_title="YouTube Downloader", page_icon="🎥")
+    
+    # Title and description
+    st.title("🎥 YouTube Downloader")
+    st.markdown("Download videos or extract audio from YouTube")
+    
+    # Create columns for input fields
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        youtube_url = st.text_input("🔗 Enter YouTube URL:")
+    
+    with col2:
+        download_type = st.selectbox("📥 Download Type:", ["video", "audio"])
+    
+    # Quality selection (only for video)
+    if download_type == "video":
+        quality_options = [None, 240, 360, 480, 720, 1080]
+        quality = st.selectbox(
+            "🎬 Video Quality:", 
+            quality_options,
+            format_func=lambda x: "Best" if x is None else f"{x}p"
+        )
     else:
-        success = download_content(youtube_url, output_directory, download_type, quality)
-        if success and platform.system() == "Windows":
-            if st.button("Open Downloads Folder"):
-                try:
-                    os.startfile(output_directory)
-                except Exception as e:
-                    st.error(f"Could not open folder: {e}")
+        quality = None
+    
+    # Get default download path and add folder selection
+    default_path = str(get_downloads_folder() / "YouTube Downloads")
+    
+    # Create two columns for path input and folder selection
+    path_col, button_col = st.columns([3, 1])
+    
+    with path_col:
+        output_directory = st.text_input("📁 Save to:", value=default_path)
+    
+    with button_col:
+        if st.button("📂 Choose Folder"):
+            try:
+                if platform.system() == "Windows":
+                    import tkinter as tk
+                    from tkinter import filedialog
+                    root = tk.Tk()
+                    root.withdraw()  # Hide the main window
+                    root.wm_attributes('-topmost', 1)  # Bring the dialog to front
+                    folder_path = filedialog.askdirectory()
+                    if folder_path:  # If a folder was selected
+                        output_directory = folder_path
+                        st.session_state['output_directory'] = folder_path  # Save to session state
+                        st.experimental_rerun()  # Rerun the app to update the text input
+                elif platform.system() == "Darwin":  # macOS
+                    folder_path = os.popen('osascript -e "choose folder with prompt "Select Download Folder:""').read().strip()
+                    if folder_path:
+                        # Convert macOS path format to regular path
+                        output_directory = folder_path.replace(':', '/')
+                        if output_directory.startswith('Macintosh HD/'):
+                            output_directory = '/' + output_directory[13:]
+                        st.session_state['output_directory'] = output_directory
+                        st.experimental_rerun()
+                else:  # Linux
+                    st.warning("Manual folder selection is not available on Linux. Please enter the path manually.")
+            except Exception as e:
+                st.error(f"Could not open folder dialog: {e}")
+    
+    # Use saved directory from session state if available
+    if 'output_directory' in st.session_state:
+        output_directory = st.session_state['output_directory']
+    
+    # Show current save location
+    st.info(f"📂 Current save location: {output_directory}")
+    
+    # Download button
+    if st.button("⬇️ Download"):
+        if not youtube_url:
+            st.error("⚠️ Please enter a YouTube URL")
+        else:
+            with st.spinner("Processing download..."):
+                success = download_content(youtube_url, output_directory, download_type, quality)
+            
+            if success:
+                # Show open folder button
+                if st.button("📂 Open Downloads Folder"):
+                    try:
+                        if platform.system() == "Windows":
+                            os.startfile(output_directory)
+                        elif platform.system() == "Darwin":  # macOS
+                            os.system(f"open '{output_directory}'")
+                        else:  # Linux
+                            os.system(f"xdg-open '{output_directory}'")
+                    except Exception as e:
+                        st.error(f"Could not open folder: {e}")
+
+if __name__ == "__main__":
+    main()
