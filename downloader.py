@@ -161,4 +161,12 @@ def create_streamlit_ui():
                 output_path = st.session_state.last_download_path
                 if platform.system() == "Windows":
                     os.startfile(output_path)
-                elif plat
+                elif platform.system() == "Darwin":  # macOS
+                    os.system(f"open '{output_path}'")
+                else:  # Linux
+                    os.system(f"xdg-open '{output_path}'")
+            except Exception as e:
+                st.error(f"Could not open folder: {e}")
+
+if __name__ == "__main__":
+    create_streamlit_ui()
