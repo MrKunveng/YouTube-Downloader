@@ -2,10 +2,13 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
-# Install system dependencies including ffmpeg
+# Install system dependencies including ffmpeg, zenity, and Qt
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
+    zenity \
+    qt5-default \
+    libqt5widgets5 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
