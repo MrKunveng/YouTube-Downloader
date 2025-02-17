@@ -2,13 +2,11 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
-# Install system dependencies including ffmpeg, zenity, and Qt
+# Install system dependencies including ffmpeg
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
     zenity \
-    qt5-default \
-    libqt5widgets5 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
@@ -17,6 +15,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
+
+# Verify ffmpeg installation
+RUN ffmpeg -version
 
 # Expose Streamlit port
 EXPOSE 8501
