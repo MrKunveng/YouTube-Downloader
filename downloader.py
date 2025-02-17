@@ -51,18 +51,25 @@ class YouTubeDownloader:
                       quality: Optional[int] = None, 
                       is_playlist: bool = False) -> dict:
         """Configure yt-dlp options based on download parameters."""
-        # Use absolute path for output template
-        template = '%(title)s.%(ext)s'
+        # Create full absolute path for output
+        output_path = str(self.output_path.absolute())
+        
+        # Define output template
         if is_playlist:
-            template = '%(playlist_title)s/%(title)s.%(ext)s'
+            template = os.path.join(output_path, '%(playlist_title)s', '%(title)s.%(ext)s')
+        else:
+            template = os.path.join(output_path, '%(title)s.%(ext)s')
         
         opts = {
-            'outtmpl': str(self.output_path.absolute() / template),
+            'outtmpl': template,  # Use the full path template
             'ignoreerrors': True,
             'quiet': False,
             'progress': True,
-            'overwrites': True,  # Overwrite files if they exist
-            'verbose': True  # Add verbose output for debugging
+            'overwrites': True,
+            'verbose': True,
+            'no_warnings': False,
+            'format_sort': ['res:1080'],  # Prefer 1080p when available
+            'merge_output_format': 'mp4'  # Force output to mp4
         }
 
         if download_type == 'audio':
@@ -75,9 +82,14 @@ class YouTubeDownloader:
                 }],
             })
         else:  # video
-            format_str = (f'bestvideo[height<={quality}]+bestaudio/best[height<={quality}]'
-                         if quality else 'bestvideo+bestaudio/best')
-            opts.update({'format': format_str})
+            if quality:
+                opts.update({
+                    'format': f'bestvideo[height<={quality}][ext=mp4]+bestaudio[ext=m4a]/best[height<={quality}]',
+                })
+            else:
+                opts.update({
+                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
+                })
         
         return opts
 
@@ -88,50 +100,72 @@ class YouTubeDownloader:
         downloaded_files = []
         
         try:
-            with yt_dlp.YoutubeDL(self._get_ydl_opts(download_type, quality, is_playlist)) as ydl:
+            # First extract info without downloading
+            with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
                 info = ydl.extract_info(url, download=False)
                 title = info.get('title', 'Unknown')
                 
-                st.write(f"⏳ Downloading: {title}")
-                progress_bar = st.progress(0)
+            st.write(f"⏳ Downloading: {title}")
+            progress_bar = st.progress(0)
+            
+            def progress_hook(d):
+                if d['status'] == 'downloading':
+                    try:
+                        total = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
+                        downloaded = d.get('downloaded_bytes', 0)
+                        if total:
+                            progress = downloaded / total
+                            progress_bar.progress(progress)
+                    except Exception as e:
+                        logger.warning(f"Progress calculation error: {e}")
+                elif d['status'] == 'finished':
+                    if 'filename' in d:
+                        file_path = Path(d['filename'])
+                        downloaded_files.append(file_path)
+                        st.write(f"✅ Saved: {file_path.name}")
+            
+            ydl_opts = self._get_ydl_opts(download_type, quality, is_playlist)
+            ydl_opts['progress_hooks'] = [progress_hook]
+            
+            # Perform the download
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                error_code = ydl.download([url])
                 
-                def progress_hook(d):
-                    if d['status'] == 'downloading':
-                        try:
-                            total = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
-                            downloaded = d.get('downloaded_bytes', 0)
-                            if total:
-                                progress = downloaded / total
-                                progress_bar.progress(progress)
-                        except Exception as e:
-                            logger.warning(f"Progress calculation error: {e}")
-                    elif d['status'] == 'finished':
-                        # Track downloaded files
-                        if 'filename' in d:
-                            downloaded_files.append(Path(d['filename']))
+                if error_code != 0:
+                    raise Exception("Download failed with error code: " + str(error_code))
+            
+            progress_bar.progress(1.0)
+            
+            # Verify downloads and show results
+            if downloaded_files:
+                st.success(f"✅ Successfully downloaded: {title}")
+                st.info(f"📂 Files saved to: {self.output_path.absolute()}")
                 
-                ydl_opts = self._get_ydl_opts(download_type, quality, is_playlist)
-                ydl_opts['progress_hooks'] = [progress_hook]
+                # Verify files exist
+                existing_files = [f for f in downloaded_files if f.exists()]
+                with st.expander("Show downloaded files"):
+                    for file in existing_files:
+                        st.write(f"- {file.name} ({self._get_file_size(file)})")
                 
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl_with_progress:
-                    ydl_with_progress.download([url])
-                
-                progress_bar.progress(1.0)
-                
-                # Show success message with file location
-                if downloaded_files:
-                    st.success(f"✅ Successfully downloaded: {title}")
-                    st.info(f"📂 Files saved to: {self.output_path.absolute()}")
-                    # List downloaded files
-                    with st.expander("Show downloaded files"):
-                        for file in downloaded_files:
-                            st.write(f"- {file.name}")
-                else:
-                    st.warning("⚠️ Download completed but no files were saved")
+                if len(existing_files) != len(downloaded_files):
+                    st.warning("⚠️ Some files may not have saved correctly")
+            else:
+                st.warning("⚠️ No files were saved")
+                logger.warning(f"No files saved for URL: {url}")
         
         except Exception as e:
             logger.error(f"Download error: {e}")
             st.error(f"❌ Download failed: {str(e)}")
+            raise
+
+    def _get_file_size(self, file_path: Path) -> str:
+        """Get human-readable file size."""
+        size_bytes = file_path.stat().st_size
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size_bytes < 1024:
+                return f"{size_bytes:.2f} {unit}"
+            size_bytes /= 1024
+        return f"{size_bytes:.2f} GB"
 
 def create_streamlit_ui():
     """Create the Streamlit user interface."""
