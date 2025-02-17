@@ -112,6 +112,11 @@ def create_streamlit_ui():
     st.title("🎥 YouTube Downloader")
     st.markdown("---")
 
+    # Create session state for tracking download completion
+    if 'download_completed' not in st.session_state:
+        st.session_state.download_completed = False
+        st.session_state.last_download_path = None
+
     with st.form("download_form"):
         col1, col2 = st.columns(2)
         
@@ -143,22 +148,17 @@ def create_streamlit_ui():
         if submit:
             if not youtube_url:
                 st.error("⚠️ Please enter a valid YouTube URL.")
-                return
-            
-            downloader = YouTubeDownloader(output_directory)
-            downloader.download(youtube_url, download_type, quality)
+            else:
+                downloader = YouTubeDownloader(output_directory)
+                downloader.download(youtube_url, download_type, quality)
+                st.session_state.download_completed = True
+                st.session_state.last_download_path = output_directory
 
-            # Show open folder button after successful download
-            if st.button("📂 Open Downloads Folder"):
-                try:
-                    if platform.system() == "Windows":
-                        os.startfile(output_directory)
-                    elif platform.system() == "Darwin":  # macOS
-                        os.system(f"open {output_directory}")
-                    else:  # Linux
-                        os.system(f"xdg-open {output_directory}")
-                except Exception as e:
-                    st.error(f"Could not open folder: {e}")
-
-if __name__ == "__main__":
-    create_streamlit_ui()
+    # Open folder button outside the form
+    if st.session_state.download_completed:
+        if st.button("📂 Open Downloads Folder"):
+            try:
+                output_path = st.session_state.last_download_path
+                if platform.system() == "Windows":
+                    os.startfile(output_path)
+                elif plat
