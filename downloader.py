@@ -21,9 +21,12 @@ def get_downloads_folder() -> Path:
         import winreg
         sub_key = r'SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders'
         downloads_guid = '{374DE290-123F-4565-9164-39C4925E467B}'
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, sub_key) as key:
-            downloads_path = winreg.QueryValueEx(key, downloads_guid)[0]
-        return Path(downloads_path)
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, sub_key) as key:
+                downloads_path = winreg.QueryValueEx(key, downloads_guid)[0]
+            return Path(downloads_path)
+        except:
+            return Path.home() / "Downloads"
     else:
         return Path.home() / "Downloads"
 
@@ -32,21 +35,34 @@ class YouTubeDownloader:
         """Initialize downloader with optional output path."""
         self.output_path = Path(output_path) if output_path else get_downloads_folder() / "YouTube Downloads"
         self._ensure_output_directory()
+        # Log the actual output path
+        logger.info(f"Files will be saved to: {self.output_path.absolute()}")
     
     def _ensure_output_directory(self) -> None:
         """Create output directory if it doesn't exist."""
-        self.output_path.mkdir(parents=True, exist_ok=True)
+        try:
+            self.output_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Created/verified directory: {self.output_path}")
+        except Exception as e:
+            logger.error(f"Error creating directory: {e}")
+            raise
     
     def _get_ydl_opts(self, download_type: SUPPORTED_DOWNLOAD_TYPES, 
                       quality: Optional[int] = None, 
                       is_playlist: bool = False) -> dict:
         """Configure yt-dlp options based on download parameters."""
-        template = '%(playlist)s/%(title)s.%(ext)s' if is_playlist else '%(title)s.%(ext)s'
+        # Use absolute path for output template
+        template = '%(title)s.%(ext)s'
+        if is_playlist:
+            template = '%(playlist_title)s/%(title)s.%(ext)s'
+        
         opts = {
-            'outtmpl': str(self.output_path / template),
+            'outtmpl': str(self.output_path.absolute() / template),
             'ignoreerrors': True,
             'quiet': False,
-            'progress': True
+            'progress': True,
+            'overwrites': True,  # Overwrite files if they exist
+            'verbose': True  # Add verbose output for debugging
         }
 
         if download_type == 'audio':
@@ -69,6 +85,8 @@ class YouTubeDownloader:
                 quality: Optional[int] = None) -> None:
         """Download video or playlist."""
         is_playlist = "playlist" in url
+        downloaded_files = []
+        
         try:
             with yt_dlp.YoutubeDL(self._get_ydl_opts(download_type, quality, is_playlist)) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -87,6 +105,10 @@ class YouTubeDownloader:
                                 progress_bar.progress(progress)
                         except Exception as e:
                             logger.warning(f"Progress calculation error: {e}")
+                    elif d['status'] == 'finished':
+                        # Track downloaded files
+                        if 'filename' in d:
+                            downloaded_files.append(Path(d['filename']))
                 
                 ydl_opts = self._get_ydl_opts(download_type, quality, is_playlist)
                 ydl_opts['progress_hooks'] = [progress_hook]
@@ -95,7 +117,17 @@ class YouTubeDownloader:
                     ydl_with_progress.download([url])
                 
                 progress_bar.progress(1.0)
-                st.success(f"✅ Successfully downloaded: {title}")
+                
+                # Show success message with file location
+                if downloaded_files:
+                    st.success(f"✅ Successfully downloaded: {title}")
+                    st.info(f"📂 Files saved to: {self.output_path.absolute()}")
+                    # List downloaded files
+                    with st.expander("Show downloaded files"):
+                        for file in downloaded_files:
+                            st.write(f"- {file.name}")
+                else:
+                    st.warning("⚠️ Download completed but no files were saved")
         
         except Exception as e:
             logger.error(f"Download error: {e}")
@@ -149,10 +181,14 @@ def create_streamlit_ui():
             if not youtube_url:
                 st.error("⚠️ Please enter a valid YouTube URL.")
             else:
-                downloader = YouTubeDownloader(output_directory)
-                downloader.download(youtube_url, download_type, quality)
-                st.session_state.download_completed = True
-                st.session_state.last_download_path = output_directory
+                try:
+                    downloader = YouTubeDownloader(output_directory)
+                    downloader.download(youtube_url, download_type, quality)
+                    st.session_state.download_completed = True
+                    st.session_state.last_download_path = output_directory
+                except Exception as e:
+                    st.error(f"❌ Error during download: {str(e)}")
+                    logger.exception("Download failed")
 
     # Open folder button outside the form
     if st.session_state.download_completed:
