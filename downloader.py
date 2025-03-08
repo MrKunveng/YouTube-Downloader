@@ -36,11 +36,21 @@ def choose_folder():
             folder_path = os.popen('osascript -e \'tell app "Finder" to POSIX path of (choose folder)\'').read().strip()
             return folder_path
         else:  # Linux
-            folder_path = os.popen('zenity --file-selection --directory --title="Select Download Folder"').read().strip()
-            return folder_path
+            try:
+                # Try zenity first
+                folder_path = os.popen('zenity --file-selection --directory --title="Select Download Folder"').read().strip()
+                return folder_path
+            except:
+                # Fallback to a default path if zenity is not available
+                default_path = str(Path.home() / "Downloads" / "YouTube Downloads")
+                st.info(f"Folder selection dialog not available. Using default path: {default_path}")
+                return default_path
     except Exception as e:
-        st.error(f"Could not open folder dialog: {e}")
-        return None
+        logger.warning(f"Could not open folder dialog: {e}")
+        # Fallback to default path
+        default_path = str(Path.home() / "Downloads" / "YouTube Downloads")
+        st.info(f"Using default download location: {default_path}")
+        return default_path
 
 def check_ffmpeg():
     """Check if ffmpeg is installed and accessible."""
