@@ -113,25 +113,24 @@ def show_ffmpeg_instructions():
 
 def download_content(url: str, output_path: str, download_type: str = 'video', quality: int = None):
     """Download video or audio content."""
-    # First check for ffmpeg
     ffmpeg_path = check_ffmpeg()
     if not ffmpeg_path:
         show_ffmpeg_instructions()
         return False
 
     try:
-        # Instead of saving to filesystem, prepare for direct download
-        output_path = Path("downloads").resolve()
-        output_path.mkdir(parents=True, exist_ok=True)
+        # Create a temporary directory for downloads
+        temp_dir = Path("temp_downloads")
+        temp_dir.mkdir(exist_ok=True)
         
         # Progress tracking
         progress_bar = st.progress(0)
         status_text = st.empty()
         downloaded_file = None
 
-        # Configure yt-dlp options
+        # Configure yt-dlp options with temporary directory
         ydl_opts = {
-            'outtmpl': str(output_path / '%(title)s.%(ext)s'),
+            'outtmpl': str(temp_dir / '%(title)s.%(ext)s'),
             'quiet': False,
             'no_warnings': False,
             'progress': True,
@@ -164,6 +163,18 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                     'merge_output_format': 'mp4',
                 })
 
+        def cleanup_temp_files():
+            """Clean up temporary files after download"""
+            try:
+                if downloaded_file and os.path.exists(downloaded_file):
+                    os.remove(downloaded_file)
+                if temp_dir.exists():
+                    for file in temp_dir.glob('*'):
+                        file.unlink()
+                    temp_dir.rmdir()
+            except Exception as e:
+                logger.warning(f"Cleanup error: {e}")
+
         def progress_hook(d):
             nonlocal downloaded_file
             if d['status'] == 'downloading':
@@ -180,35 +191,40 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
             elif d['status'] == 'finished':
                 downloaded_file = d.get('filename', '')
                 filename = os.path.basename(downloaded_file)
-                status_text.text(f"✅ Completed: {filename}")
+                status_text.text(f"✅ Processing: {filename}")
                 progress_bar.progress(1.0)
 
         ydl_opts['progress_hooks'] = [progress_hook]
 
-        # Perform download
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            title = info.get('title', 'Unknown')
-            st.write(f"📥 Starting download for: {title}")
-            ydl.download([url])
-            
-            if downloaded_file and os.path.exists(downloaded_file):
-                file_size = os.path.getsize(downloaded_file) / (1024 * 1024)  # Convert to MB
+        try:
+            # Perform download
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                title = info.get('title', 'Unknown')
+                st.write(f"📥 Starting download for: {title}")
+                ydl.download([url])
                 
-                # Create download link for the file
-                with open(downloaded_file, 'rb') as f:
+                if downloaded_file and os.path.exists(downloaded_file):
+                    file_size = os.path.getsize(downloaded_file) / (1024 * 1024)  # Convert to MB
+                    
+                    # Create download button
+                    with open(downloaded_file, 'rb') as f:
+                        file_data = f.read()
+                    
                     st.download_button(
-                        label=f"Download {os.path.basename(downloaded_file)} ({file_size:.1f} MB)",
-                        data=f,
+                        label=f"⬇️ Download {os.path.basename(downloaded_file)} ({file_size:.1f} MB)",
+                        data=file_data,
                         file_name=os.path.basename(downloaded_file),
                         mime='application/octet-stream'
                     )
-                
-                # Clean up the temporary file
-                os.remove(downloaded_file)
-                return True
+                    
+                    return True
             
-        return False
+            return False
+
+        finally:
+            # Clean up temporary files
+            cleanup_temp_files()
 
     except Exception as e:
         st.error(f"❌ Download failed: {str(e)}")
@@ -218,53 +234,48 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
 def main():
     st.set_page_config(page_title="YouTube Downloader", page_icon="🎥")
     
-    # Initialize session state for output directory
-    default_path = str(validate_path(Path.home() / "Downloads" / "YouTube Downloads"))
-    if 'output_directory' not in st.session_state:
-        st.session_state['output_directory'] = default_path
-    
     # Title and description
     st.title("🎥 YouTube Downloader")
-    st.markdown("Download videos or extract audio from YouTube")
+    st.markdown("""
+    Download videos or extract audio from YouTube
     
-    # Input fields
-    youtube_url = st.text_input("🔗 Enter YouTube URL:")
+    ℹ️ Files will be downloaded directly to your device
+    """)
     
-    # Download type and quality selection
-    col1, col2 = st.columns(2)
-    with col1:
-        download_type = st.selectbox("📥 Download Type:", ["video", "audio"])
-    with col2:
-        if download_type == "video":
-            quality_options = [None, 240, 360, 480, 720, 1080]
-            quality = st.selectbox(
-                "🎬 Video Quality:", 
-                quality_options,
-                format_func=lambda x: "Best" if x is None else f"{x}p"
-            )
-        else:
-            quality = None
+    # Input fields in a clean layout
+    with st.form("download_form"):
+        youtube_url = st.text_input("🔗 Enter YouTube URL:")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            download_type = st.selectbox("📥 Download Type:", ["video", "audio"])
+        with col2:
+            if download_type == "video":
+                quality_options = [None, 240, 360, 480, 720, 1080]
+                quality = st.selectbox(
+                    "🎬 Video Quality:", 
+                    quality_options,
+                    format_func=lambda x: "Best" if x is None else f"{x}p"
+                )
+            else:
+                quality = None
+        
+        submit_button = st.form_submit_button("⬇️ Download")
     
-    # Remove folder selection and path display
-    output_path = "downloads"
-    
-    # Download button
-    if st.button("⬇️ Download", key="main_download_btn"):
+    if submit_button:
         if not youtube_url:
             st.error("⚠️ Please enter a YouTube URL")
         else:
             with st.spinner("Processing download..."):
                 success = download_content(
                     youtube_url,
-                    output_path,
+                    "temp_downloads",
                     download_type,
                     quality
                 )
             
-            # Remove the open folder and download another buttons
             if success:
-                if st.button("⬇️ Download Another", key="download_another_btn"):
-                    st.rerun()
+                st.button("🔄 Download Another", on_click=st.rerun)
 
 if __name__ == "__main__":
     main()
