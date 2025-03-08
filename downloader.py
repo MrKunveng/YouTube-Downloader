@@ -21,6 +21,10 @@ def validate_path(path: str) -> Path:
     except Exception:
         return Path.home() / "Downloads" / "YouTube Downloads"
 
+def is_cloud_environment():
+    """Check if we're running in a cloud environment."""
+    return os.environ.get('STREAMLIT_CLOUD', False) or not os.environ.get('DISPLAY', False)
+
 def choose_folder():
     """Open a folder selection dialog based on the operating system."""
     try:
@@ -36,21 +40,19 @@ def choose_folder():
             folder_path = os.popen('osascript -e \'tell app "Finder" to POSIX path of (choose folder)\'').read().strip()
             return folder_path
         else:  # Linux
-            try:
-                # Try zenity first
-                folder_path = os.popen('zenity --file-selection --directory --title="Select Download Folder"').read().strip()
+            # For cloud or Linux environments, use a text-based approach
+            default_path = str(Path.home() / "Downloads" / "YouTube Downloads")
+            folder_path = st.text_input(
+                "Enter folder path:",
+                value=default_path,
+                key="folder_path_input"
+            )
+            if st.button("Confirm Path", key="confirm_folder_btn"):
                 return folder_path
-            except:
-                # Fallback to a default path if zenity is not available
-                default_path = str(Path.home() / "Downloads" / "YouTube Downloads")
-                st.info(f"Folder selection dialog not available. Using default path: {default_path}")
-                return default_path
+            return None
     except Exception as e:
         logger.warning(f"Could not open folder dialog: {e}")
-        # Fallback to default path
-        default_path = str(Path.home() / "Downloads" / "YouTube Downloads")
-        st.info(f"Using default download location: {default_path}")
-        return default_path
+        return None
 
 def check_ffmpeg():
     """Check if ffmpeg is installed and accessible."""
@@ -273,21 +275,18 @@ def main():
         else:
             quality = None
     
-    # Create two columns for path input and folder selection
+    # Modify the folder selection UI based on environment
     path_col, button_col = st.columns([3, 1])
     
     with path_col:
-        # Display text input bound to session state
         user_input = st.text_input(
             "📁 Save to:",
             value=st.session_state['output_directory'],
             key="path_input"
         )
-        # Validate the input path and update session state
         validated_path = str(validate_path(user_input))
         if validated_path != st.session_state['output_directory']:
             st.session_state['output_directory'] = validated_path
-            # Optionally show a warning if path was adjusted
             if user_input != validated_path:
                 st.warning(f"Adjusted path to: {validated_path}")
     
