@@ -1,3 +1,7 @@
 streamlit>=1.28.0
 yt-dlp>=2023.11.16
 pathlib>=1.0.1 
+yt-dlp>=2023.3.4
+pywin32>=305; platform_system == "Windows"
+tk>=0.1.0; platform_system == "Windows"
+PyQt5>=5.15.0; platform_system == "Darwin"
