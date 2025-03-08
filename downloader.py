@@ -179,6 +179,8 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
             'no_warnings': False,
             'progress': True,
             'prefer_ffmpeg': True,
+            'ignoreerrors': True,  # Skip unavailable videos
+            'no_abort_on_error': True,  # Continue downloading despite errors
         }
 
         # Only set ffmpeg_location if it's a specific path, not just 'ffmpeg'
@@ -220,6 +222,9 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                         status_text.text(f"⏳ Downloading: {filename}")
                 except Exception as e:
                     logger.warning(f"Progress calculation error: {e}")
+            elif d['status'] == 'error':
+                st.warning(f"⚠️ This video is unavailable or has been removed")
+                return False
             elif d['status'] == 'finished':
                 downloaded_file = d.get('filename', '')
                 filename = os.path.basename(downloaded_file)
@@ -230,17 +235,32 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
 
         # Perform download
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            title = info.get('title', 'Unknown')
-            st.write(f"📥 Starting download for: {title}")
-            ydl.download([url])
-            
-            if downloaded_file and os.path.exists(downloaded_file):
-                file_size = os.path.getsize(downloaded_file) / (1024 * 1024)  # Convert to MB
-                st.success(f"✅ Successfully downloaded: {os.path.basename(downloaded_file)} ({file_size:.1f} MB)")
-                return True
-            
-        return False
+            try:
+                info = ydl.extract_info(url, download=False)
+                if info is None:
+                    st.warning("⚠️ This video is unavailable or has been removed")
+                    return False
+                    
+                title = info.get('title', 'Unknown')
+                st.write(f"📥 Starting download for: {title}")
+                ydl.download([url])
+                
+                if downloaded_file and os.path.exists(downloaded_file):
+                    file_size = os.path.getsize(downloaded_file) / (1024 * 1024)  # Convert to MB
+                    st.success(f"✅ Successfully downloaded: {os.path.basename(downloaded_file)} ({file_size:.1f} MB)")
+                    return True
+                return False
+
+            except yt_dlp.utils.DownloadError as e:
+                if "Video unavailable" in str(e):
+                    st.warning("⚠️ This video is unavailable or has been removed")
+                else:
+                    st.error(f"❌ Download failed: {str(e)}")
+                return False
+            except Exception as e:
+                st.error(f"❌ Download failed: {str(e)}")
+                logger.error(f"Download error: {e}")
+                return False
 
     except Exception as e:
         st.error(f"❌ Download failed: {str(e)}")
