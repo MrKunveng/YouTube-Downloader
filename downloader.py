@@ -40,15 +40,21 @@ def choose_folder():
             folder_path = os.popen('osascript -e \'tell app "Finder" to POSIX path of (choose folder)\'').read().strip()
             return folder_path
         else:  # Linux
-            # For cloud or Linux environments, use a text-based approach
-            default_path = str(Path.home() / "Downloads" / "YouTube Downloads")
-            folder_path = st.text_input(
-                "Enter folder path:",
-                value=default_path,
-                key="folder_path_input"
-            )
-            if st.button("Confirm Path", key="confirm_folder_btn"):
-                return folder_path
+            # Create a container for folder selection
+            with st.container():
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    default_path = str(Path.home() / "Downloads" / "YouTube Downloads")
+                    folder_path = st.text_input(
+                        "Enter custom path:",
+                        value=default_path,
+                        key="linux_folder_path"
+                    )
+                with col2:
+                    st.write("")  # Add some spacing
+                    st.write("")  # Add some spacing
+                    if st.button("Use This Path", key="use_path_btn"):
+                        return folder_path
             return None
     except Exception as e:
         logger.warning(f"Could not open folder dialog: {e}")
