@@ -41,8 +41,108 @@ def choose_folder():
         st.error(f"Could not open folder dialog: {e}")
         return None
 
+def check_ffmpeg():
+    """Check if ffmpeg is installed and accessible."""
+    try:
+        if platform.system() == "Windows":
+            # Check in current directory and PATH
+            ffmpeg_paths = [
+                Path.cwd() / "ffmpeg.exe",
+                Path.cwd() / "ffmpeg" / "bin" / "ffmpeg.exe",
+                Path.home() / "ffmpeg" / "bin" / "ffmpeg.exe",  # Added home directory check
+            ]
+            for path in ffmpeg_paths:
+                if path.exists():
+                    return str(path)
+            
+            # Check if available in PATH
+            import subprocess
+            try:
+                subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+                return 'ffmpeg'
+            except subprocess.CalledProcessError:
+                return None
+        else:
+            # For Linux and macOS
+            import subprocess
+            try:
+                subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+                return 'ffmpeg'
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                return None
+    except Exception:
+        return None
+
+def show_ffmpeg_instructions():
+    """Show instructions for installing ffmpeg."""
+    st.error("❌ FFmpeg is required but not found!")
+    
+    system = platform.system()
+    if system == "Windows":
+        st.markdown("""
+        ### FFmpeg Installation Instructions for Windows:
+        
+        **Option 1: Direct Download**
+        1. Download FFmpeg from [here](https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip)
+        2. Extract the zip file
+        3. Copy the `ffmpeg.exe` file from the `bin` folder to your YouTube Downloader folder
+        
+        **Option 2: Using Chocolatey**
+        ```powershell
+        choco install ffmpeg
+        ```
+        """)
+    elif system == "Darwin":  # macOS
+        st.markdown("""
+        ### FFmpeg Installation Instructions for macOS:
+        
+        **Option 1: Using Homebrew (Recommended)**
+        ```bash
+        brew install ffmpeg
+        ```
+        
+        **Option 2: Using MacPorts**
+        ```bash
+        sudo port install ffmpeg
+        ```
+        """)
+    else:  # Linux
+        st.markdown("""
+        ### FFmpeg Installation Instructions for Linux:
+        
+        **For Ubuntu/Debian:**
+        ```bash
+        sudo apt update
+        sudo apt install ffmpeg
+        ```
+        
+        **For Fedora:**
+        ```bash
+        sudo dnf install ffmpeg
+        ```
+        
+        **For Arch Linux:**
+        ```bash
+        sudo pacman -S ffmpeg
+        ```
+        """)
+    
+    st.markdown("""
+    After installing:
+    1. Close this application
+    2. Restart your terminal/command prompt
+    3. Run the application again
+    """)
+    st.stop()  # Stop the app here to prevent further execution
+
 def download_content(url: str, output_path: str, download_type: str = 'video', quality: int = None):
     """Download video or audio content."""
+    # First check for ffmpeg
+    ffmpeg_path = check_ffmpeg()
+    if not ffmpeg_path:
+        show_ffmpeg_instructions()
+        return False
+
     try:
         # Convert to Path object and ensure it exists
         output_path = Path(output_path).expanduser().resolve()
@@ -59,8 +159,12 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
             'quiet': False,
             'no_warnings': False,
             'progress': True,
-            'prefer_ffmpeg': True
+            'prefer_ffmpeg': True,
         }
+
+        # Only set ffmpeg_location if it's a specific path, not just 'ffmpeg'
+        if ffmpeg_path != 'ffmpeg':
+            ydl_opts['ffmpeg_location'] = ffmpeg_path
 
         # Configure format based on download type
         if download_type == 'audio':
@@ -75,12 +179,12 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
         else:  # video
             if quality:
                 ydl_opts.update({
-                    'format': f'bestvideo[height<={quality}][ext=mp4]+bestaudio[ext=m4a]/best[height<={quality}]',
+                    'format': f'bestvideo[height<={quality}]+bestaudio/best[height<={quality}]',
                     'merge_output_format': 'mp4',
                 })
             else:
                 ydl_opts.update({
-                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
+                    'format': 'bestvideo+bestaudio/best',
                     'merge_output_format': 'mp4',
                 })
 
@@ -127,6 +231,11 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
 def main():
     st.set_page_config(page_title="YouTube Downloader", page_icon="🎥")
     
+    # Initialize session state for output directory
+    default_path = str(validate_path(Path.home() / "Downloads" / "YouTube Downloads"))
+    if 'output_directory' not in st.session_state:
+        st.session_state['output_directory'] = default_path
+    
     # Title and description
     st.title("🎥 YouTube Downloader")
     st.markdown("Download videos or extract audio from YouTube")
@@ -149,59 +258,67 @@ def main():
         else:
             quality = None
     
-    # Get default download path
-    default_path = str(validate_path(Path.home() / "Downloads" / "YouTube Downloads"))
-    
     # Create two columns for path input and folder selection
     path_col, button_col = st.columns([3, 1])
     
     with path_col:
-        output_directory = st.text_input("📁 Save to:", value=default_path)
-        # Validate the input path
-        output_directory = str(validate_path(output_directory))
+        # Display text input bound to session state
+        user_input = st.text_input(
+            "📁 Save to:",
+            value=st.session_state['output_directory'],
+            key="path_input"
+        )
+        # Validate the input path and update session state
+        validated_path = str(validate_path(user_input))
+        if validated_path != st.session_state['output_directory']:
+            st.session_state['output_directory'] = validated_path
+            # Optionally show a warning if path was adjusted
+            if user_input != validated_path:
+                st.warning(f"Adjusted path to: {validated_path}")
     
     with button_col:
-        if st.button("📂 Choose Folder"):
+        if st.button("📂 Choose Folder", key="choose_folder_btn"):
             folder_path = choose_folder()
             if folder_path:
-                output_directory = str(validate_path(folder_path))
-                st.session_state['output_directory'] = output_directory
-                st.experimental_rerun()
-    
-    # Use saved directory from session state if available
-    if 'output_directory' in st.session_state:
-        output_directory = st.session_state['output_directory']
+                validated_folder = str(validate_path(folder_path))
+                st.session_state['output_directory'] = validated_folder
+                st.rerun()
     
     # Show current save location with path validation
-    output_directory = str(validate_path(output_directory))
-    st.info(f"📂 Current save location: {output_directory}")
+    st.info(f"📂 Current save location: {st.session_state['output_directory']}")
     
     # Download button
-    if st.button("⬇️ Download"):
+    if st.button("⬇️ Download", key="main_download_btn"):
         if not youtube_url:
             st.error("⚠️ Please enter a YouTube URL")
         else:
             with st.spinner("Processing download..."):
-                success = download_content(youtube_url, output_directory, download_type, quality)
+                success = download_content(
+                    youtube_url,
+                    st.session_state['output_directory'],
+                    download_type,
+                    quality
+                )
             
             if success:
                 # Show open folder button
                 col1, col2 = st.columns([1, 3])
                 with col1:
-                    if st.button("📂 Open Folder"):
+                    if st.button("📂 Open Folder", key="open_folder_btn"):
                         try:
+                            path = Path(st.session_state['output_directory'])
                             if platform.system() == "Windows":
-                                os.startfile(output_directory)
+                                os.startfile(str(path))  # Convert Path to string
                             elif platform.system() == "Darwin":  # macOS
-                                os.system(f"open '{output_directory}'")
+                                os.system(f"open '{str(path)}'")  # Convert Path to string
                             else:  # Linux
-                                os.system(f"xdg-open '{output_directory}'")
+                                os.system(f"xdg-open '{str(path)}'")  # Convert Path to string
                         except Exception as e:
                             st.error(f"Could not open folder: {e}")
                 
                 with col2:
-                    if st.button("⬇️ Download Another"):
-                        st.experimental_rerun()
+                    if st.button("⬇️ Download Another", key="download_another_btn"):
+                        st.rerun()
 
 if __name__ == "__main__":
     main()
