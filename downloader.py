@@ -12,34 +12,10 @@ logger = logging.getLogger(__name__)
 def validate_path(path: str) -> Path:
     """Validate and return a safe path for downloads."""
     try:
-        path = Path(path).resolve()
-        # Ensure path is within user's home directory
-        if not str(path).startswith(str(Path.home())):
-            path = Path.home() / "Downloads" / "YouTube Downloads"
-        return path
+        # Use a relative path instead of home directory
+        return Path("downloads")
     except Exception:
-        return Path.home() / "Downloads" / "YouTube Downloads"
-
-def choose_folder():
-    """Open a folder selection dialog based on the operating system."""
-    try:
-        if platform.system() == "Windows":
-            import tkinter as tk
-            from tkinter import filedialog
-            root = tk.Tk()
-            root.withdraw()  # Hide the root window
-            root.wm_attributes('-topmost', 1)  # Bring the dialog to the front
-            folder_path = filedialog.askdirectory(initialdir=str(Path.home() / "Downloads"))
-            return folder_path
-        elif platform.system() == "Darwin":  # macOS
-            folder_path = os.popen('osascript -e \'tell app "Finder" to POSIX path of (choose folder)\'').read().strip()
-            return folder_path
-        else:  # Linux
-            folder_path = os.popen('zenity --file-selection --directory --title="Select Download Folder"').read().strip()
-            return folder_path
-    except Exception as e:
-        st.error(f"Could not open folder dialog: {e}")
-        return None
+        return Path("downloads")
 
 def check_ffmpeg():
     """Check if ffmpeg is installed and accessible."""
@@ -144,8 +120,8 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
         return False
 
     try:
-        # Convert to Path object and ensure it exists
-        output_path = Path(output_path).expanduser().resolve()
+        # Instead of saving to filesystem, prepare for direct download
+        output_path = Path("downloads").resolve()
         output_path.mkdir(parents=True, exist_ok=True)
         
         # Progress tracking
@@ -218,7 +194,18 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
             
             if downloaded_file and os.path.exists(downloaded_file):
                 file_size = os.path.getsize(downloaded_file) / (1024 * 1024)  # Convert to MB
-                st.success(f"✅ Successfully downloaded: {os.path.basename(downloaded_file)} ({file_size:.1f} MB)")
+                
+                # Create download link for the file
+                with open(downloaded_file, 'rb') as f:
+                    st.download_button(
+                        label=f"Download {os.path.basename(downloaded_file)} ({file_size:.1f} MB)",
+                        data=f,
+                        file_name=os.path.basename(downloaded_file),
+                        mime='application/octet-stream'
+                    )
+                
+                # Clean up the temporary file
+                os.remove(downloaded_file)
                 return True
             
         return False
@@ -258,34 +245,8 @@ def main():
         else:
             quality = None
     
-    # Create two columns for path input and folder selection
-    path_col, button_col = st.columns([3, 1])
-    
-    with path_col:
-        # Display text input bound to session state
-        user_input = st.text_input(
-            "📁 Save to:",
-            value=st.session_state['output_directory'],
-            key="path_input"
-        )
-        # Validate the input path and update session state
-        validated_path = str(validate_path(user_input))
-        if validated_path != st.session_state['output_directory']:
-            st.session_state['output_directory'] = validated_path
-            # Optionally show a warning if path was adjusted
-            if user_input != validated_path:
-                st.warning(f"Adjusted path to: {validated_path}")
-    
-    with button_col:
-        if st.button("📂 Choose Folder", key="choose_folder_btn"):
-            folder_path = choose_folder()
-            if folder_path:
-                validated_folder = str(validate_path(folder_path))
-                st.session_state['output_directory'] = validated_folder
-                st.rerun()
-    
-    # Show current save location with path validation
-    st.info(f"📂 Current save location: {st.session_state['output_directory']}")
+    # Remove folder selection and path display
+    output_path = "downloads"
     
     # Download button
     if st.button("⬇️ Download", key="main_download_btn"):
@@ -295,30 +256,15 @@ def main():
             with st.spinner("Processing download..."):
                 success = download_content(
                     youtube_url,
-                    st.session_state['output_directory'],
+                    output_path,
                     download_type,
                     quality
                 )
             
+            # Remove the open folder and download another buttons
             if success:
-                # Show open folder button
-                col1, col2 = st.columns([1, 3])
-                with col1:
-                    if st.button("📂 Open Folder", key="open_folder_btn"):
-                        try:
-                            path = Path(st.session_state['output_directory'])
-                            if platform.system() == "Windows":
-                                os.startfile(str(path))  # Convert Path to string
-                            elif platform.system() == "Darwin":  # macOS
-                                os.system(f"open '{str(path)}'")  # Convert Path to string
-                            else:  # Linux
-                                os.system(f"xdg-open '{str(path)}'")  # Convert Path to string
-                        except Exception as e:
-                            st.error(f"Could not open folder: {e}")
-                
-                with col2:
-                    if st.button("⬇️ Download Another", key="download_another_btn"):
-                        st.rerun()
+                if st.button("⬇️ Download Another", key="download_another_btn"):
+                    st.rerun()
 
 if __name__ == "__main__":
     main()
