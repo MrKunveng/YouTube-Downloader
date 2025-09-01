@@ -4,71 +4,44 @@ from pathlib import Path
 import platform
 import yt_dlp
 import logging
-import time
 
-# Configure logging
+# Configure logging for cloud environment
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Cloud deployment configuration
+IS_CLOUD_DEPLOYMENT = os.environ.get('STREAMLIT_SERVER_HEADLESS', 'false').lower() == 'true'
 
 def validate_path(path: str) -> Path:
     """Validate and return a safe path for downloads."""
     try:
-        path = Path(path).resolve()
-        # Ensure path is within user's home directory
-        if not str(path).startswith(str(Path.home())):
-            path = Path.home() / "Downloads" / "YouTube Downloads"
-        return path
+        # In cloud environment, always use temp directory
+        if IS_CLOUD_DEPLOYMENT:
+            return Path("/tmp")
+        # Use a relative path instead of home directory for local
+        return Path("downloads")
     except Exception:
-        return Path.home() / "Downloads" / "YouTube Downloads"
-
-def is_cloud_environment():
-    """Check if we're running in a cloud environment."""
-    return os.environ.get('STREAMLIT_CLOUD', False) or not os.environ.get('DISPLAY', False)
-
-def choose_folder():
-    """Open a folder selection dialog based on the operating system."""
-    try:
-        if platform.system() == "Windows":
-            import tkinter as tk
-            from tkinter import filedialog
-            root = tk.Tk()
-            root.withdraw()  # Hide the root window
-            root.wm_attributes('-topmost', 1)  # Bring the dialog to the front
-            folder_path = filedialog.askdirectory(initialdir=str(Path.home() / "Downloads"))
-            return folder_path
-        elif platform.system() == "Darwin":  # macOS
-            folder_path = os.popen('osascript -e \'tell app "Finder" to POSIX path of (choose folder)\'').read().strip()
-            return folder_path
-        else:  # Linux
-            # Create a container for folder selection
-            with st.container():
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    default_path = str(Path.home() / "Downloads" / "YouTube Downloads")
-                    folder_path = st.text_input(
-                        "Enter custom path:",
-                        value=default_path,
-                        key="linux_folder_path"
-                    )
-                with col2:
-                    st.write("")  # Add some spacing
-                    st.write("")  # Add some spacing
-                    if st.button("Use This Path", key="use_path_btn"):
-                        return folder_path
-            return None
-    except Exception as e:
-        logger.warning(f"Could not open folder dialog: {e}")
-        return None
+        return Path("downloads")
 
 def check_ffmpeg():
     """Check if ffmpeg is installed and accessible."""
     try:
+        # In cloud environment, ffmpeg should be available via packages.txt
+        if IS_CLOUD_DEPLOYMENT:
+            import subprocess
+            try:
+                subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+                return 'ffmpeg'
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                return None
+        
+        # Local environment checks
         if platform.system() == "Windows":
             # Check in current directory and PATH
             ffmpeg_paths = [
                 Path.cwd() / "ffmpeg.exe",
                 Path.cwd() / "ffmpeg" / "bin" / "ffmpeg.exe",
-                Path.home() / "ffmpeg" / "bin" / "ffmpeg.exe",  # Added home directory check
+                Path.home() / "ffmpeg" / "bin" / "ffmpeg.exe",
             ]
             for path in ffmpeg_paths:
                 if path.exists():
@@ -94,6 +67,10 @@ def check_ffmpeg():
 
 def show_ffmpeg_instructions():
     """Show instructions for installing ffmpeg."""
+    if IS_CLOUD_DEPLOYMENT:
+        st.error("❌ FFmpeg is not available in the cloud environment. Please contact support.")
+        return
+    
     st.error("❌ FFmpeg is required but not found!")
     
     system = platform.system()
@@ -154,27 +131,30 @@ def show_ffmpeg_instructions():
     """)
     st.stop()  # Stop the app here to prevent further execution
 
-def download_content(url: str, output_path: str, download_type: str = 'video', quality: int = None):
+def download_content(url: str, output_path: str, download_type: str = 'video', quality: int = None, download_folder: str = None):
     """Download video or audio content."""
-    # First check for ffmpeg
     ffmpeg_path = check_ffmpeg()
     if not ffmpeg_path:
         show_ffmpeg_instructions()
         return False
 
     try:
-        # Convert to Path object and ensure it exists
-        output_path = Path(output_path).expanduser().resolve()
-        output_path.mkdir(parents=True, exist_ok=True)
+        # Use selected download folder or default to temp_downloads
+        if download_folder and os.path.exists(download_folder):
+            temp_dir = Path(download_folder)
+        else:
+            temp_dir = Path("temp_downloads")
+        
+        temp_dir.mkdir(exist_ok=True)
         
         # Progress tracking
         progress_bar = st.progress(0)
         status_text = st.empty()
         downloaded_file = None
 
-        # Configure yt-dlp options
+        # Configure yt-dlp options with selected directory
         ydl_opts = {
-            'outtmpl': str(output_path / '%(title)s.%(ext)s'),
+            'outtmpl': str(temp_dir / '%(title)s.%(ext)s'),
             'quiet': False,
             'no_warnings': False,
             'progress': True,
@@ -207,6 +187,20 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                     'merge_output_format': 'mp4',
                 })
 
+        def cleanup_temp_files():
+            """Clean up temporary files after download"""
+            try:
+                # Only cleanup if using default temp directory
+                if not download_folder or not os.path.exists(download_folder):
+                    if downloaded_file and os.path.exists(downloaded_file):
+                        os.remove(downloaded_file)
+                    if temp_dir.exists() and temp_dir.name == "temp_downloads":
+                        for file in temp_dir.glob('*'):
+                            file.unlink()
+                        temp_dir.rmdir()
+            except Exception as e:
+                logger.warning(f"Cleanup error: {e}")
+
         def progress_hook(d):
             nonlocal downloaded_file
             if d['status'] == 'downloading':
@@ -223,24 +217,46 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
             elif d['status'] == 'finished':
                 downloaded_file = d.get('filename', '')
                 filename = os.path.basename(downloaded_file)
-                status_text.text(f"✅ Completed: {filename}")
+                status_text.text(f"✅ Processing: {filename}")
                 progress_bar.progress(1.0)
 
         ydl_opts['progress_hooks'] = [progress_hook]
 
-        # Perform download
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            title = info.get('title', 'Unknown')
-            st.write(f"📥 Starting download for: {title}")
-            ydl.download([url])
+        try:
+            # Perform download
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                title = info.get('title', 'Unknown')
+                st.write(f"📥 Starting download for: {title}")
+                ydl.download([url])
+                
+                if downloaded_file and os.path.exists(downloaded_file):
+                    file_size = os.path.getsize(downloaded_file) / (1024 * 1024)  # Convert to MB
+                    
+                    # Show success message with file location
+                    if download_folder:
+                        st.success(f"✅ Download completed! File saved to: {download_folder}")
+                        st.info(f"📁 File: {os.path.basename(downloaded_file)} ({file_size:.1f} MB)")
+                    else:
+                        # Create download button for temp files
+                        with open(downloaded_file, 'rb') as f:
+                            file_data = f.read()
+                        
+                        st.download_button(
+                            label=f"⬇️ Download {os.path.basename(downloaded_file)} ({file_size:.1f} MB)",
+                            data=file_data,
+                            file_name=os.path.basename(downloaded_file),
+                            mime='application/octet-stream'
+                        )
+                    
+                    return True
             
-            if downloaded_file and os.path.exists(downloaded_file):
-                file_size = os.path.getsize(downloaded_file) / (1024 * 1024)  # Convert to MB
-                st.success(f"✅ Successfully downloaded: {os.path.basename(downloaded_file)} ({file_size:.1f} MB)")
-                return True
-            
-        return False
+            return False
+
+        finally:
+            # Clean up temporary files only if not using custom folder
+            if not download_folder:
+                cleanup_temp_files()
 
     except Exception as e:
         st.error(f"❌ Download failed: {str(e)}")
@@ -248,97 +264,133 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
         return False
 
 def main():
-    st.set_page_config(page_title="YouTube Downloader", page_icon="🎥")
-    
-    # Add a loading message that shows while the app is waking up
-    with st.spinner("🚀 App is starting up..."):
-        time.sleep(0.1)  # Small delay to show the message during cold starts
-    
-    # Initialize session state for output directory
-    default_path = str(validate_path(Path.home() / "Downloads" / "YouTube Downloads"))
-    if 'output_directory' not in st.session_state:
-        st.session_state['output_directory'] = default_path
+    st.set_page_config(
+        page_title="YouTube Downloader", 
+        page_icon="🎥",
+        layout="wide"
+    )
     
     # Title and description
     st.title("🎥 YouTube Downloader")
-    st.markdown("Download videos or extract audio from YouTube")
     
-    # Input fields
-    youtube_url = st.text_input("🔗 Enter YouTube URL:")
+    if IS_CLOUD_DEPLOYMENT:
+        st.markdown("""
+        Download videos or extract audio from YouTube
+        
+        ☁️ **Cloud Deployment Mode** - Files will be temporarily stored and available for download
+        """)
+    else:
+        st.markdown("""
+        Download videos or extract audio from YouTube
+        
+        💻 **Local Mode** - Choose a download folder or use the default temporary location
+        """)
     
-    # Download type and quality selection
-    col1, col2 = st.columns(2)
-    with col1:
-        download_type = st.selectbox("📥 Download Type:", ["video", "audio"])
-    with col2:
-        if download_type == "video":
-            quality_options = [None, 240, 360, 480, 720, 1080]
-            quality = st.selectbox(
-                "🎬 Video Quality:", 
-                quality_options,
-                format_func=lambda x: "Best" if x is None else f"{x}p"
-            )
-        else:
-            quality = None
-    
-    # Modify the folder selection UI based on environment
-    path_col, button_col = st.columns([3, 1])
-    
-    with path_col:
-        user_input = st.text_input(
-            "📁 Save to:",
-            value=st.session_state['output_directory'],
-            key="path_input"
-        )
-        validated_path = str(validate_path(user_input))
-        if validated_path != st.session_state['output_directory']:
-            st.session_state['output_directory'] = validated_path
-            if user_input != validated_path:
-                st.warning(f"Adjusted path to: {validated_path}")
-    
-    with button_col:
-        if st.button("📂 Choose Folder", key="choose_folder_btn"):
-            folder_path = choose_folder()
-            if folder_path:
-                validated_folder = str(validate_path(folder_path))
-                st.session_state['output_directory'] = validated_folder
+    # Download folder selection (only show in local mode)
+    if not IS_CLOUD_DEPLOYMENT:
+        st.subheader("📁 Download Folder Selection")
+        
+        # Initialize session state for folder selection
+        if 'selected_folder' not in st.session_state:
+            st.session_state.selected_folder = ""
+        
+        # Show common download locations
+        common_folders = {
+            "Downloads": os.path.expanduser("~/Downloads"),
+            "Desktop": os.path.expanduser("~/Desktop"),
+            "Documents": os.path.expanduser("~/Documents"),
+            "Custom Path": ""
+        }
+        
+        # Quick selection buttons
+        st.write("**Quick Select:**")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            if st.button("📁 Downloads"):
+                st.session_state.selected_folder = common_folders["Downloads"]
                 st.rerun()
+        
+        with col2:
+            if st.button("🖥️ Desktop"):
+                st.session_state.selected_folder = common_folders["Desktop"]
+                st.rerun()
+        
+        with col3:
+            if st.button("📄 Documents"):
+                st.session_state.selected_folder = common_folders["Documents"]
+                st.rerun()
+        
+        with col4:
+            if st.button("🗂️ Custom"):
+                st.session_state.selected_folder = ""
+                st.rerun()
+        
+        # Manual path input
+        download_folder = st.text_input(
+            "📂 Download Folder Path:",
+            value=st.session_state.selected_folder,
+            placeholder="Enter full path (e.g., /Users/username/Downloads) or leave empty for temporary location",
+            help="Enter the full path to your desired download folder"
+        )
+        
+        # Update session state
+        if download_folder != st.session_state.selected_folder:
+            st.session_state.selected_folder = download_folder
+        
+        # Validate folder path
+        if download_folder:
+            if not os.path.exists(download_folder):
+                st.error("❌ Selected folder does not exist!")
+                download_folder = None
+            elif not os.access(download_folder, os.W_OK):
+                st.error("❌ No write permission for selected folder!")
+                download_folder = None
+            else:
+                st.success(f"✅ Using folder: {download_folder}")
+                st.info("💡 Files will be saved directly to this folder and preserved.")
+        else:
+            st.info("💡 Files will be saved to a temporary location and can be downloaded via the download button.")
+    else:
+        # Cloud mode - always use temp directory
+        download_folder = None
+        st.info("☁️ Cloud mode: Files will be temporarily stored and available for download")
     
-    # Show current save location with path validation
-    st.info(f"📂 Current save location: {st.session_state['output_directory']}")
+    # Input fields in a clean layout
+    with st.form("download_form"):
+        youtube_url = st.text_input("🔗 Enter YouTube URL:")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            download_type = st.selectbox("📥 Download Type:", ["video", "audio"])
+        with col2:
+            if download_type == "video":
+                quality_options = [None, 240, 360, 480, 720, 1080]
+                quality = st.selectbox(
+                    "🎬 Video Quality:", 
+                    quality_options,
+                    format_func=lambda x: "Best" if x is None else f"{x}p"
+                )
+            else:
+                quality = None
+        
+        submit_button = st.form_submit_button("⬇️ Download")
     
-    # Download button
-    if st.button("⬇️ Download", key="main_download_btn"):
+    if submit_button:
         if not youtube_url:
             st.error("⚠️ Please enter a YouTube URL")
         else:
             with st.spinner("Processing download..."):
                 success = download_content(
                     youtube_url,
-                    st.session_state['output_directory'],
+                    "temp_downloads",
                     download_type,
-                    quality
+                    quality,
+                    download_folder
                 )
             
             if success:
-                # Show open folder button
-                col1, col2 = st.columns([1, 3])
-                with col1:
-                    if st.button("📂 Open Folder", key="open_folder_btn"):
-                        try:
-                            path = Path(st.session_state['output_directory'])
-                            if platform.system() == "Windows":
-                                os.startfile(str(path))  # Convert Path to string
-                            elif platform.system() == "Darwin":  # macOS
-                                os.system(f"open '{str(path)}'")  # Convert Path to string
-                            else:  # Linux
-                                os.system(f"xdg-open '{str(path)}'")  # Convert Path to string
-                        except Exception as e:
-                            st.error(f"Could not open folder: {e}")
-                
-                with col2:
-                    if st.button("⬇️ Download Another", key="download_another_btn"):
-                        st.rerun()
+                st.button("🔄 Download Another", on_click=st.rerun)
 
 if __name__ == "__main__":
     main()
