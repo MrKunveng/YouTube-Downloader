@@ -152,20 +152,40 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
         status_text = st.empty()
         downloaded_file = None
 
-        # Configure yt-dlp options with selected directory
+        # Configure yt-dlp options with improved settings for better compatibility
         ydl_opts = {
             'outtmpl': str(temp_dir / '%(title)s.%(ext)s'),
             'quiet': False,
             'no_warnings': False,
             'progress': True,
             'prefer_ffmpeg': True,
+            'ignoreerrors': False,
+            'nooverwrites': False,
+            'writesubtitles': False,
+            'writeautomaticsub': False,
+            'skip_unavailable_fragments': True,
+            'ignore_no_formats_error': True,
+            'extractor_retries': 3,
+            'fragment_retries': 3,
+            'retries': 3,
+            'socket_timeout': 30,
+            'extract_flat': False,
+            # Add user agent and cookies to avoid 403 errors
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            },
+            # Force use of ffmpeg for HLS streams to avoid fragment issues
+            'external_downloader': 'ffmpeg',
+            'external_downloader_args': {
+                'ffmpeg': ['-timeout', '30000000']  # 30 second timeout
+            }
         }
 
         # Only set ffmpeg_location if it's a specific path, not just 'ffmpeg'
         if ffmpeg_path != 'ffmpeg':
             ydl_opts['ffmpeg_location'] = ffmpeg_path
 
-        # Configure format based on download type
+        # Configure format based on download type with more robust selection
         if download_type == 'audio':
             ydl_opts.update({
                 'format': 'bestaudio/best',
@@ -177,13 +197,14 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
             })
         else:  # video
             if quality:
+                # Use simpler format selection that avoids HLS issues
                 ydl_opts.update({
-                    'format': f'bestvideo[height<={quality}]+bestaudio/best[height<={quality}]',
+                    'format': f'best[height<={quality}]/worst[height<={quality}]',
                     'merge_output_format': 'mp4',
                 })
             else:
                 ydl_opts.update({
-                    'format': 'bestvideo+bestaudio/best',
+                    'format': 'best/worst',
                     'merge_output_format': 'mp4',
                 })
 
@@ -223,12 +244,46 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
         ydl_opts['progress_hooks'] = [progress_hook]
 
         try:
-            # Perform download
+            # Perform download with better error handling
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                title = info.get('title', 'Unknown')
-                st.write(f"📥 Starting download for: {title}")
-                ydl.download([url])
+                # First, try to extract info to validate the URL
+                try:
+                    info = ydl.extract_info(url, download=False)
+                    title = info.get('title', 'Unknown')
+                    st.write(f"📥 Starting download for: {title}")
+                    
+                    # Check available formats and log them for debugging
+                    formats = info.get('formats', [])
+                    if formats:
+                        st.info(f" Found {len(formats)} available formats")
+                        # Log first few formats for debugging
+                        for i, fmt in enumerate(formats[:5]):
+                            st.write(f"  Format {i+1}: {fmt.get('format_id', 'N/A')} - {fmt.get('resolution', 'N/A')} - {fmt.get('ext', 'N/A')}")
+                    
+                except Exception as e:
+                    st.error(f"❌ Error extracting video info: {str(e)}")
+                    logger.error(f"Info extraction error: {e}")
+                    return False
+                
+                # Perform the actual download
+                try:
+                    ydl.download([url])
+                except Exception as e:
+                    st.error(f"❌ Download failed: {str(e)}")
+                    logger.error(f"Download error: {e}")
+                    
+                    # Try fallback approach with different format
+                    st.info("🔄 Trying fallback download method...")
+                    try:
+                        fallback_opts = ydl_opts.copy()
+                        fallback_opts['format'] = 'worst'  # Try worst quality as fallback
+                        fallback_opts['external_downloader'] = None  # Disable external downloader
+                        
+                        with yt_dlp.YoutubeDL(fallback_opts) as fallback_ydl:
+                            fallback_ydl.download([url])
+                    except Exception as fallback_e:
+                        st.error(f"❌ Fallback download also failed: {str(fallback_e)}")
+                        return False
                 
                 if downloaded_file and os.path.exists(downloaded_file):
                     file_size = os.path.getsize(downloaded_file) / (1024 * 1024)  # Convert to MB
@@ -236,7 +291,7 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                     # Show success message with file location
                     if download_folder:
                         st.success(f"✅ Download completed! File saved to: {download_folder}")
-                        st.info(f"📁 File: {os.path.basename(downloaded_file)} ({file_size:.1f} MB)")
+                        st.info(f" File: {os.path.basename(downloaded_file)} ({file_size:.1f} MB)")
                     else:
                         # Create download button for temp files
                         with open(downloaded_file, 'rb') as f:
@@ -250,6 +305,9 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                         )
                     
                     return True
+                else:
+                    st.error("❌ Download completed but file not found. This might be due to format issues.")
+                    return False
             
             return False
 
@@ -342,6 +400,7 @@ def main():
         if download_folder:
             if not os.path.exists(download_folder):
                 st.error("❌ Selected folder does not exist!")
+                st.info("💡 Try using the quick select buttons above, or leave empty to use temporary location")
                 download_folder = None
             elif not os.access(download_folder, os.W_OK):
                 st.error("❌ No write permission for selected folder!")
