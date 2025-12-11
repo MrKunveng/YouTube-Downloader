@@ -4,9 +4,6 @@ from pathlib import Path
 import platform
 import yt_dlp
 import logging
-import subprocess
-import sys
-import re
 
 # Configure logging for cloud environment
 logging.basicConfig(level=logging.INFO)
@@ -165,116 +162,26 @@ def select_best_format_with_audio(formats, quality=None):
     
     return combined_formats[0] if combined_formats else None
 
-def check_yt_dlp_version():
-    """Check if yt-dlp is up to date and warn if outdated."""
-    try:
-        result = subprocess.run(
-            [sys.executable, '-m', 'yt_dlp', '--version'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result.returncode == 0:
-            version = result.stdout.strip()
-            logger.info(f"yt-dlp version: {version}")
-            # Could add version comparison here if needed
-    except Exception as e:
-        logger.warning(f"Could not check yt-dlp version: {e}")
-
-def extract_video_id_from_url(url):
-    """Extract video ID from various YouTube URL formats."""
-    if not url:
-        return None
-    
-    # Log the URL for debugging
-    logger.info(f"Extracting video ID from URL: {url}")
-    
-    # Standard watch URL: https://www.youtube.com/watch?v=VIDEO_ID
-    # Also handles: watch?v=VIDEO_ID&list=...
-    match = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', url)
-    if match:
-        video_id = match.group(1)
-        logger.info(f"Found video ID (watch format): {video_id}")
-        return video_id
-    
-    # Short URL: https://youtu.be/VIDEO_ID or https://youtu.be/VIDEO_ID?t=...
-    match = re.search(r'youtu\.be/([a-zA-Z0-9_-]{11})', url)
-    if match:
-        video_id = match.group(1)
-        logger.info(f"Found video ID (short format): {video_id}")
-        return video_id
-    
-    # Embed URL: https://www.youtube.com/embed/VIDEO_ID
-    match = re.search(r'/embed/([a-zA-Z0-9_-]{11})', url)
-    if match:
-        video_id = match.group(1)
-        logger.info(f"Found video ID (embed format): {video_id}")
-        return video_id
-    
-    # Mobile URL: https://m.youtube.com/watch?v=VIDEO_ID
-    match = re.search(r'm\.youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})', url)
-    if match:
-        video_id = match.group(1)
-        logger.info(f"Found video ID (mobile format): {video_id}")
-        return video_id
-    
-    # Playlist URL with video: https://www.youtube.com/playlist?list=...&v=VIDEO_ID
-    match = re.search(r'playlist[^&]*[&]v=([a-zA-Z0-9_-]{11})', url)
-    if match:
-        video_id = match.group(1)
-        logger.info(f"Found video ID (playlist with v param): {video_id}")
-        return video_id
-    
-    # Try to find any 11-character alphanumeric string that looks like a video ID
-    # This is a fallback for unusual URL formats
-    match = re.search(r'([a-zA-Z0-9_-]{11})', url)
-    if match:
-        potential_id = match.group(1)
-        # Basic validation: YouTube video IDs are 11 characters
-        # Check if it's in a context that suggests it's a video ID
-        if any(pattern in url for pattern in ['watch', 'youtu.be', 'embed', 'v=']):
-            logger.info(f"Found potential video ID (fallback): {potential_id}")
-            return potential_id
-    
-    logger.warning(f"Could not extract video ID from URL: {url}")
-    return None
-
 def download_content(url: str, output_path: str, download_type: str = 'video', quality: int = None, download_folder: str = None):
     """Download video or audio content."""
-    # Enhanced logging for cloud mode debugging
-    logger.info(f"Cloud mode: {IS_CLOUD_DEPLOYMENT}")
-    logger.info(f"Download type: {download_type}, Quality: {quality}")
-    
-    # Check yt-dlp version on first download attempt
-    check_yt_dlp_version()
-    
     ffmpeg_path = check_ffmpeg()
-    logger.info(f"ffmpeg path: {ffmpeg_path}")
-    
     if not ffmpeg_path:
         show_ffmpeg_instructions()
         return False
 
     try:
-        # In cloud mode, always use /tmp and ignore custom download folder
-        if IS_CLOUD_DEPLOYMENT:
-            temp_dir = Path("/tmp")
-            is_custom_folder = False
-            logger.info("Cloud mode: Using /tmp for downloads")
-        elif download_folder and os.path.exists(download_folder) and os.access(download_folder, os.W_OK):
-            # Use absolute path for download folder (local mode only)
+        # Use selected download folder or default to temp_downloads
+        if download_folder and os.path.exists(download_folder) and os.access(download_folder, os.W_OK):
+            # Use absolute path for download folder
             temp_dir = Path(download_folder).resolve()
             is_custom_folder = True
-            logger.info(f"Local mode: Using custom folder: {temp_dir}")
         else:
-            # Use absolute path for temp directory (local mode)
+            # Use absolute path for temp directory
             temp_dir = Path("temp_downloads").resolve()
             is_custom_folder = False
-            logger.info(f"Local mode: Using temp directory: {temp_dir}")
         
         # Ensure directory exists
         temp_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Download folder: {temp_dir}")
         
         # Progress tracking
         progress_bar = st.progress(0)
@@ -284,20 +191,10 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
         # Configure yt-dlp options with improved settings for better compatibility
         # Use absolute path for output template
         output_template = str(temp_dir / '%(title)s.%(ext)s')
+        logger.info(f"Download location: {temp_dir}")
         logger.info(f"Output template: {output_template}")
-        if is_custom_folder and not IS_CLOUD_DEPLOYMENT:
+        if is_custom_folder:
             st.info(f"📁 Files will be saved to: {temp_dir}")
-        elif IS_CLOUD_DEPLOYMENT:
-            st.info("☁️ Cloud mode: Files will be temporarily stored in /tmp")
-        
-        # Check for cookies file (optional but recommended for cloud)
-        cookies_file = None
-        if os.path.exists('cookies.txt'):
-            cookies_file = 'cookies.txt'
-            logger.info("Found cookies.txt - will use for authentication")
-        elif os.path.exists('.streamlit/cookies.txt'):
-            cookies_file = '.streamlit/cookies.txt'
-            logger.info("Found cookies.txt in .streamlit folder")
         
         ydl_opts = {
             'outtmpl': output_template,
@@ -311,38 +208,22 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
             'writeautomaticsub': False,
             'skip_unavailable_fragments': True,
             'ignore_no_formats_error': False,  # Changed to False to catch errors properly
-            'extractor_retries': 10,
-            'fragment_retries': 10,
-            'retries': 10,
-            'socket_timeout': 60,
-            'file_access_retries': 3,
+            'extractor_retries': 5,
+            'fragment_retries': 5,
+            'retries': 5,
+            'socket_timeout': 30,
             'extract_flat': False,
-            # Use multiple clients to get best format availability and avoid 403 errors
-            # Try mweb (mobile web) first as it's less likely to be blocked
+            # Use multiple clients to get best format availability
+            # iOS and Android clients often have better format options
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['mweb', 'ios', 'android', 'web'],  # Try mweb first (mobile web - less restrictions)
+                    'player_client': ['ios', 'android', 'web'],  # Try ios first (best formats), then android, then web
                     'player_skip': ['webpage', 'configs'],
-                    'skip': ['dash', 'hls'],  # Skip problematic formats
                 }
             },
-            # Add sleep interval to avoid rate limiting
-            'sleep_interval': 1,
-            'max_sleep_interval': 5,
-            # Comprehensive headers to avoid 403 errors - mimic real browser
+            # Add user agent and cookies to avoid 403 errors
             'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
-                'Cache-Control': 'max-age=0',
-                'Referer': 'https://www.youtube.com/',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             },
             # Don't force external downloader - let yt-dlp handle merging properly
             # Only use ffmpeg for HLS streams if needed
@@ -350,11 +231,6 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                 'ffmpeg': ['-timeout', '30000000']  # 30 second timeout
             }
         }
-        
-        # Add cookies if available (helps with cloud IP blocking)
-        if cookies_file:
-            ydl_opts['cookiefile'] = cookies_file
-            logger.info(f"Using cookies file: {cookies_file}")
 
         # Only set ffmpeg_location if it's a specific path, not just 'ffmpeg'
         if ffmpeg_path != 'ffmpeg':
@@ -448,69 +324,9 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
             info_opts['quiet'] = True
             info_opts['no_warnings'] = True
             
-            # Extract video ID FIRST before any extraction attempts to avoid playlist JSON errors
-            is_playlist = 'list=' in url.lower() or '/playlist' in url.lower()
-            original_url = url
-            
-            # If it's a playlist URL, extract video ID and use direct video URL immediately
-            video_id = None
-            if is_playlist:
-                st.info("📋 Playlist detected. Extracting video ID...")
-                video_id = extract_video_id_from_url(url)
-                if video_id:
-                    # Use direct video URL to completely bypass playlist extraction
-                    url = f"https://www.youtube.com/watch?v={video_id}"
-                    st.success(f"✅ Extracted video ID: {video_id}")
-                    st.info(f"🔄 Using direct video URL to avoid playlist parsing errors")
-                    # Ensure noplaylist is set
-                    info_opts['noplaylist'] = True
-                else:
-                    st.warning("⚠️ Could not extract video ID from playlist URL.")
-                    st.info("💡 Trying alternative extraction methods...")
-                    
-                    # Try to extract from URL parameters more aggressively
-                    # Sometimes video ID might be in different parameter positions
-                    url_parts = url.split('&')
-                    for part in url_parts:
-                        if 'v=' in part:
-                            potential_id = part.split('v=')[-1].split('&')[0].split('?')[0].strip()
-                            if len(potential_id) == 11 and re.match(r'^[a-zA-Z0-9_-]+$', potential_id):
-                                video_id = potential_id
-                                url = f"https://www.youtube.com/watch?v={video_id}"
-                                st.success(f"✅ Found video ID in URL parameters: {video_id}")
-                                st.info(f"🔄 Using direct video URL")
-                                info_opts['noplaylist'] = True
-                                break
-                    
-                    if not video_id:
-                        st.warning("⚠️ Will try with noplaylist flag (may still fail if playlist parsing is required)...")
-                        info_opts['noplaylist'] = True
-            
             with yt_dlp.YoutubeDL(info_opts) as info_ydl:
                 try:
-                    
-                    # Now extract info using the direct video URL (or original if not playlist)
                     info = info_ydl.extract_info(url, download=False)
-                    
-                    # Check if it's still a playlist entry (shouldn't happen with direct URL, but just in case)
-                    if info.get('_type') == 'playlist':
-                        st.warning("⚠️ Still detected as playlist. Extracting first video...")
-                        entries = info.get('entries', [])
-                        if entries:
-                            # Get first video from playlist
-                            first_video = entries[0]
-                            if first_video:
-                                info = first_video
-                                # Try to get video URL from entry
-                                if first_video.get('id'):
-                                    url = f"https://www.youtube.com/watch?v={first_video.get('id')}"
-                                elif first_video.get('url'):
-                                    url = first_video.get('url')
-                                st.info(f"📹 Extracted video: {info.get('title', 'Unknown')}")
-                        else:
-                            st.error("❌ Playlist has no entries available")
-                            return False
-                    
                     title = info.get('title', 'Unknown')
                     st.write(f"📥 Starting download for: {title}")
                     
@@ -541,106 +357,19 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                             format_id = best_format.get('format_id')
                             height = best_format.get('height', 'N/A')
                             ext = best_format.get('ext', 'mp4')
-                            st.success(f"  ✅ Selected format {format_id} ({height}p, {ext}) - has video and audio")
-                            # Override format selector to use this specific format
-                            ydl_opts['format'] = format_id
+                            st.success(f"  ✅ Found best format: {format_id} ({height}p, {ext}) - has video and audio")
+                            # Don't override format selector - let yt-dlp handle format selection
+                            # The format selector will naturally pick this format if available
+                            # Overriding with specific format ID can cause "format not available" errors
                         else:
                             st.warning("  ⚠️ Could not find combined format, will use format selector (may need merging)")
                     
                 except Exception as e:
-                    error_str = str(e)
+                    st.error(f"❌ Error extracting video info: {str(e)}")
                     logger.error(f"Info extraction error: {e}")
-                    
-                    # Check if it's a playlist JSON error
-                    if 'playlist' in error_str.lower() or 'PLY_' in error_str or 'JSONDecodeError' in error_str:
-                        st.warning("⚠️ Playlist extraction failed. Extracting video ID and trying direct URL...")
-                        try:
-                            # Extract video ID from original URL (before any modifications)
-                            video_id = extract_video_id_from_url(original_url if 'original_url' in locals() else url)
-                            
-                            # If still no video ID, try more aggressive extraction
-                            if not video_id:
-                                st.info("🔍 Trying alternative extraction methods...")
-                                # Try parsing URL manually
-                                url_to_parse = original_url if 'original_url' in locals() else url
-                                
-                                # Method 1: Split by & and look for v= parameter
-                                for param in url_to_parse.split('&'):
-                                    if 'v=' in param:
-                                        potential_id = param.split('v=')[-1].split('?')[0].strip()
-                                        if len(potential_id) == 11 and re.match(r'^[a-zA-Z0-9_-]+$', potential_id):
-                                            video_id = potential_id
-                                            st.info(f"✅ Found video ID using parameter parsing: {video_id}")
-                                            break
-                                
-                                # Method 2: Look for 11-character alphanumeric strings after common patterns
-                                if not video_id:
-                                    patterns = [
-                                        r'watch\?[^&]*v=([a-zA-Z0-9_-]{11})',
-                                        r'youtu\.be/([a-zA-Z0-9_-]{11})',
-                                        r'/v/([a-zA-Z0-9_-]{11})',
-                                        r'video_id=([a-zA-Z0-9_-]{11})',
-                                    ]
-                                    for pattern in patterns:
-                                        match = re.search(pattern, url_to_parse)
-                                        if match:
-                                            video_id = match.group(1)
-                                            st.info(f"✅ Found video ID using pattern matching: {video_id}")
-                                            break
-                            
-                            if video_id:
-                                # Use direct video URL with noplaylist
-                                direct_video_url = f"https://www.youtube.com/watch?v={video_id}"
-                                st.info(f"🔄 Trying direct video URL: {direct_video_url}")
-                                
-                                # Force single video extraction with simpler options
-                                retry_opts = info_opts.copy()
-                                retry_opts['noplaylist'] = True
-                                retry_opts['extract_flat'] = False
-                                retry_opts['extractor_args'] = {
-                                    'youtube': {
-                                        'player_client': ['mweb'],
-                                    }
-                                }
-                                
-                                with yt_dlp.YoutubeDL(retry_opts) as retry_ydl:
-                                    info = retry_ydl.extract_info(direct_video_url, download=False)
-                                    url = direct_video_url  # Update URL for download
-                                    title = info.get('title', 'Unknown')
-                                    st.write(f"📥 Starting download for: {title}")
-                            else:
-                                st.error("❌ Could not extract video ID from URL")
-                                st.error(f"**URL provided:** {original_url if 'original_url' in locals() else url}")
-                                st.error("""
-                                **Troubleshooting steps:**
-                                1. **Copy the direct video URL** from YouTube (not playlist URL)
-                                   - Right-click the video → Copy video URL
-                                   - Format: `https://www.youtube.com/watch?v=VIDEO_ID`
-                                2. **Update yt-dlp**: `pip install --upgrade yt-dlp`
-                                3. **Check if the video is available** and not restricted
-                                4. **Wait a few minutes** and try again (rate limiting)
-                                5. **Try a different video** to see if the issue is specific to this video
-                                """)
-                                return False
-                        except Exception as retry_e:
-                            st.error(f"❌ Error extracting video info: {str(retry_e)}")
-                            st.error("""
-                            **Troubleshooting steps:**
-                            1. **Update yt-dlp**: `pip install --upgrade yt-dlp`
-                            2. **Try a direct video URL** instead of playlist URL: `https://www.youtube.com/watch?v=VIDEO_ID`
-                            3. **Check if the video is available** and not restricted
-                            4. **Wait a few minutes** and try again (rate limiting)
-                            """)
-                            logger.error(f"Retry extraction error: {retry_e}")
-                            return False
-                    else:
-                        st.error(f"❌ Error extracting video info: {error_str}")
-                        st.info("💡 Try updating yt-dlp: `pip install --upgrade yt-dlp`")
-                        return False
+                    return False
             
             # Now perform the actual download with the selected format
-            # Make sure we use the updated URL (direct video URL if it was a playlist)
-            ydl_opts['noplaylist'] = True  # Ensure we don't try to download playlist
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 
                 # Perform the actual download
@@ -664,33 +393,7 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                         'bestvideo[vcodec!=none]+bestaudio[acodec!=none]/best[acodec!=none][vcodec!=none]'  # Final fallbacks
                     )
                     
-                    # Enhanced headers for fallback methods
-                    enhanced_headers = {
-                        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
-                        'Accept': '*/*',
-                        'Accept-Language': 'en-US,en;q=0.9',
-                        'Accept-Encoding': 'gzip, deflate, br',
-                        'Connection': 'keep-alive',
-                        'Referer': 'https://www.youtube.com/',
-                        'Origin': 'https://www.youtube.com',
-                    }
-                    
                     fallback_methods = [
-                        {
-                            'name': 'Mobile Web client (mweb)',
-                            'opts': {
-                                'extractor_args': {
-                                    'youtube': {
-                                        'player_client': ['mweb'],
-                                    }
-                                },
-                                'format': fallback_format,
-                                'merge_output_format': 'mp4',
-                                'http_headers': enhanced_headers,
-                                'sleep_interval': 2,
-                                'external_downloader': None,
-                            }
-                        },
                         {
                             'name': 'iOS client with video+audio',
                             'opts': {
@@ -701,8 +404,6 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                                 },
                                 'format': fallback_format,
                                 'merge_output_format': 'mp4',
-                                'http_headers': enhanced_headers,
-                                'sleep_interval': 2,
                                 'external_downloader': None,
                             }
                         },
@@ -716,8 +417,6 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                                 },
                                 'format': fallback_format,
                                 'merge_output_format': 'mp4',
-                                'http_headers': enhanced_headers,
-                                'sleep_interval': 2,
                                 'external_downloader': None,
                             }
                         },
@@ -731,8 +430,6 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                                 },
                                 'format': fallback_format,
                                 'merge_output_format': 'mp4',
-                                'http_headers': enhanced_headers,
-                                'sleep_interval': 2,
                                 'external_downloader': None,
                             }
                         },
@@ -741,8 +438,6 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                             'opts': {
                                 'format': 'bestvideo+bestaudio/best/worst',
                                 'merge_output_format': 'mp4',
-                                'http_headers': enhanced_headers,
-                                'sleep_interval': 3,
                                 'ignore_no_formats_error': True,
                                 'external_downloader': None,
                             }
@@ -761,27 +456,9 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                             st.success(f"✅ Success with fallback method: {method['name']}")
                             break
                         except Exception as fallback_e:
-                            error_str = str(fallback_e)
                             logger.warning(f"Fallback method {i+1} failed: {fallback_e}")
-                            
-                            # Check if it's a 403 error specifically
-                            if '403' in error_str or 'Forbidden' in error_str:
-                                if i == len(fallback_methods) - 1:
-                                    st.error("❌ All download methods failed due to HTTP 403 Forbidden error.")
-                                    st.warning("""
-                                    **Possible solutions:**
-                                    1. **Update yt-dlp** to the latest version:
-                                       ```bash
-                                       pip install --upgrade yt-dlp
-                                       ```
-                                    2. **Cloud environment limitations**: YouTube may be blocking requests from cloud IPs.
-                                       Try running locally instead.
-                                    3. **Rate limiting**: Wait a few minutes and try again.
-                                    4. **Video restrictions**: Some videos may have download restrictions.
-                                    """)
-                                    return False
-                            elif i == len(fallback_methods) - 1:
-                                st.error(f"❌ All download methods failed. Last error: {error_str}")
+                            if i == len(fallback_methods) - 1:
+                                st.error(f"❌ All download methods failed. Last error: {str(fallback_e)}")
                                 st.info("💡 Try updating yt-dlp: `pip install --upgrade yt-dlp`")
                                 return False
                 
