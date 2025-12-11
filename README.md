@@ -2,6 +2,16 @@
 
 A Streamlit web application that allows you to download YouTube videos or extract audio from YouTube videos. Built with Python, Streamlit, and yt-dlp.
 
+## 🌐 Live Demo
+
+🚀 **Deploy this app for free on:**
+- [Hugging Face Spaces](https://huggingface.co/spaces) - Recommended for Streamlit apps
+- [Streamlit Cloud](https://streamlit.io/cloud)
+- [Render](https://render.com)
+- [Railway](https://railway.app)
+
+See `README_HF.md` for Hugging Face Spaces deployment instructions.
+
 ## 🌟 Features
 
 - Download YouTube videos in various qualities (240p to 1080p)
@@ -75,8 +85,19 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
+## 🚀 Deploy to Hugging Face Spaces (Free!)
+
+This app is ready to deploy on Hugging Face Spaces! See `README_HF.md` for detailed deployment instructions.
+
+**Quick steps:**
+1. Create a Hugging Face account at [huggingface.co](https://huggingface.co)
+2. Create a new Space with Streamlit SDK
+3. Push this repository to your Space
+4. Your app will be live in minutes!
+
 ## ⚡ Powered By
 
 - [Streamlit](https://streamlit.io/)
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp)
-- [FFmpeg](https://ffmpeg.org/) 
+- [FFmpeg](https://ffmpeg.org/)
+- [Hugging Face Spaces](https://huggingface.co/spaces) 

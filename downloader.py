@@ -10,7 +10,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Cloud deployment configuration
-IS_CLOUD_DEPLOYMENT = os.environ.get('STREAMLIT_SERVER_HEADLESS', 'false').lower() == 'true'
+# Detects if running in cloud (Streamlit Cloud, Hugging Face Spaces, etc.)
+IS_CLOUD_DEPLOYMENT = (
+    os.environ.get('STREAMLIT_SERVER_HEADLESS', 'false').lower() == 'true' or
+    os.environ.get('SPACE_ID') is not None  # Hugging Face Spaces
+)
 
 def validate_path(path: str) -> Path:
     """Validate and return a safe path for downloads."""
