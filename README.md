@@ -85,15 +85,25 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## 🚀 Deploy to Hugging Face Spaces (Free!)
+## 🚀 Deploy for Free!
 
-This app is ready to deploy on Hugging Face Spaces! See `README_HF.md` for detailed deployment instructions.
+This app is ready to deploy on multiple platforms:
 
-**Quick steps:**
-1. Create a Hugging Face account at [huggingface.co](https://huggingface.co)
-2. Create a new Space with Streamlit SDK
-3. Push this repository to your Space
-4. Your app will be live in minutes!
+### Replit (Recommended for Easy Setup)
+- See `README_REPLIT.md` for detailed instructions
+- **Quick steps:**
+  1. Go to [replit.com](https://replit.com) and sign up
+  2. Click "Create Repl" → "Import from GitHub"
+  3. Enter this repository URL
+  4. Click "Run" - your app is live!
+
+### Hugging Face Spaces
+- See `README_HF.md` for detailed instructions
+- **Quick steps:**
+  1. Create a Hugging Face account at [huggingface.co](https://huggingface.co)
+  2. Create a new Space with Streamlit SDK
+  3. Push this repository to your Space
+  4. Your app will be live in minutes!
 
 ## ⚡ Powered By
 

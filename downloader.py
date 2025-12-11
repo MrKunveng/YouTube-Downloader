@@ -10,10 +10,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Cloud deployment configuration
-# Detects if running in cloud (Streamlit Cloud, Hugging Face Spaces, etc.)
+# Detects if running in cloud (Streamlit Cloud, Hugging Face Spaces, Replit, etc.)
 IS_CLOUD_DEPLOYMENT = (
     os.environ.get('STREAMLIT_SERVER_HEADLESS', 'false').lower() == 'true' or
-    os.environ.get('SPACE_ID') is not None  # Hugging Face Spaces
+    os.environ.get('SPACE_ID') is not None or  # Hugging Face Spaces
+    os.environ.get('REPL_ID') is not None  # Replit
 )
 
 def validate_path(path: str) -> Path:
