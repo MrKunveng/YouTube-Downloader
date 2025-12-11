@@ -4,6 +4,8 @@ from pathlib import Path
 import platform
 import yt_dlp
 import logging
+import subprocess
+import sys
 
 # Configure logging for cloud environment
 logging.basicConfig(level=logging.INFO)
@@ -162,8 +164,27 @@ def select_best_format_with_audio(formats, quality=None):
     
     return combined_formats[0] if combined_formats else None
 
+def check_yt_dlp_version():
+    """Check if yt-dlp is up to date and warn if outdated."""
+    try:
+        result = subprocess.run(
+            [sys.executable, '-m', 'yt_dlp', '--version'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            version = result.stdout.strip()
+            logger.info(f"yt-dlp version: {version}")
+            # Could add version comparison here if needed
+    except Exception as e:
+        logger.warning(f"Could not check yt-dlp version: {e}")
+
 def download_content(url: str, output_path: str, download_type: str = 'video', quality: int = None, download_folder: str = None):
     """Download video or audio content."""
+    # Check yt-dlp version on first download attempt
+    check_yt_dlp_version()
+    
     ffmpeg_path = check_ffmpeg()
     if not ffmpeg_path:
         show_ffmpeg_instructions()
@@ -208,22 +229,37 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
             'writeautomaticsub': False,
             'skip_unavailable_fragments': True,
             'ignore_no_formats_error': False,  # Changed to False to catch errors properly
-            'extractor_retries': 5,
-            'fragment_retries': 5,
-            'retries': 5,
-            'socket_timeout': 30,
+            'extractor_retries': 10,
+            'fragment_retries': 10,
+            'retries': 10,
+            'socket_timeout': 60,
+            'file_access_retries': 3,
             'extract_flat': False,
-            # Use multiple clients to get best format availability
-            # iOS and Android clients often have better format options
+            # Use multiple clients to get best format availability and avoid 403 errors
+            # Try mweb (mobile web) first as it's less likely to be blocked
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['ios', 'android', 'web'],  # Try ios first (best formats), then android, then web
+                    'player_client': ['mweb', 'ios', 'android', 'web'],  # Try mweb first (mobile web - less restrictions)
                     'player_skip': ['webpage', 'configs'],
                 }
             },
-            # Add user agent and cookies to avoid 403 errors
+            # Add sleep interval to avoid rate limiting
+            'sleep_interval': 1,
+            'max_sleep_interval': 5,
+            # Comprehensive headers to avoid 403 errors - mimic real browser
             'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Cache-Control': 'max-age=0',
+                'Referer': 'https://www.youtube.com/',
             },
             # Don't force external downloader - let yt-dlp handle merging properly
             # Only use ffmpeg for HLS streams if needed
@@ -392,7 +428,33 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                         'bestvideo[vcodec!=none]+bestaudio[acodec!=none]/best[acodec!=none][vcodec!=none]'  # Final fallbacks
                     )
                     
+                    # Enhanced headers for fallback methods
+                    enhanced_headers = {
+                        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+                        'Accept': '*/*',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'Connection': 'keep-alive',
+                        'Referer': 'https://www.youtube.com/',
+                        'Origin': 'https://www.youtube.com',
+                    }
+                    
                     fallback_methods = [
+                        {
+                            'name': 'Mobile Web client (mweb)',
+                            'opts': {
+                                'extractor_args': {
+                                    'youtube': {
+                                        'player_client': ['mweb'],
+                                    }
+                                },
+                                'format': fallback_format,
+                                'merge_output_format': 'mp4',
+                                'http_headers': enhanced_headers,
+                                'sleep_interval': 2,
+                                'external_downloader': None,
+                            }
+                        },
                         {
                             'name': 'iOS client with video+audio',
                             'opts': {
@@ -403,6 +465,8 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                                 },
                                 'format': fallback_format,
                                 'merge_output_format': 'mp4',
+                                'http_headers': enhanced_headers,
+                                'sleep_interval': 2,
                                 'external_downloader': None,
                             }
                         },
@@ -416,6 +480,8 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                                 },
                                 'format': fallback_format,
                                 'merge_output_format': 'mp4',
+                                'http_headers': enhanced_headers,
+                                'sleep_interval': 2,
                                 'external_downloader': None,
                             }
                         },
@@ -429,6 +495,8 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                                 },
                                 'format': fallback_format,
                                 'merge_output_format': 'mp4',
+                                'http_headers': enhanced_headers,
+                                'sleep_interval': 2,
                                 'external_downloader': None,
                             }
                         },
@@ -437,6 +505,8 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                             'opts': {
                                 'format': 'bestvideo+bestaudio/best/worst',
                                 'merge_output_format': 'mp4',
+                                'http_headers': enhanced_headers,
+                                'sleep_interval': 3,
                                 'ignore_no_formats_error': True,
                                 'external_downloader': None,
                             }
@@ -455,9 +525,27 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                             st.success(f"✅ Success with fallback method: {method['name']}")
                             break
                         except Exception as fallback_e:
+                            error_str = str(fallback_e)
                             logger.warning(f"Fallback method {i+1} failed: {fallback_e}")
-                            if i == len(fallback_methods) - 1:
-                                st.error(f"❌ All download methods failed. Last error: {str(fallback_e)}")
+                            
+                            # Check if it's a 403 error specifically
+                            if '403' in error_str or 'Forbidden' in error_str:
+                                if i == len(fallback_methods) - 1:
+                                    st.error("❌ All download methods failed due to HTTP 403 Forbidden error.")
+                                    st.warning("""
+                                    **Possible solutions:**
+                                    1. **Update yt-dlp** to the latest version:
+                                       ```bash
+                                       pip install --upgrade yt-dlp
+                                       ```
+                                    2. **Cloud environment limitations**: YouTube may be blocking requests from cloud IPs.
+                                       Try running locally instead.
+                                    3. **Rate limiting**: Wait a few minutes and try again.
+                                    4. **Video restrictions**: Some videos may have download restrictions.
+                                    """)
+                                    return False
+                            elif i == len(fallback_methods) - 1:
+                                st.error(f"❌ All download methods failed. Last error: {error_str}")
                                 st.info("💡 Try updating yt-dlp: `pip install --upgrade yt-dlp`")
                                 return False
                 
