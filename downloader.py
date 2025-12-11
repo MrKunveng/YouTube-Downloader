@@ -6,6 +6,7 @@ import yt_dlp
 import logging
 import subprocess
 import sys
+import re
 
 # Configure logging for cloud environment
 logging.basicConfig(level=logging.INFO)
@@ -241,6 +242,7 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                 'youtube': {
                     'player_client': ['mweb', 'ios', 'android', 'web'],  # Try mweb first (mobile web - less restrictions)
                     'player_skip': ['webpage', 'configs'],
+                    'skip': ['dash', 'hls'],  # Skip problematic formats
                 }
             },
             # Add sleep interval to avoid rate limiting
@@ -362,7 +364,36 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
             
             with yt_dlp.YoutubeDL(info_opts) as info_ydl:
                 try:
+                    # Check if URL is a playlist
+                    is_playlist = 'list=' in url or '/playlist' in url
+                    
+                    # For playlists, try to extract just the video first
+                    if is_playlist:
+                        st.info("📋 Playlist detected. Extracting individual video...")
+                        # Try to extract just the video, not the playlist
+                        info_opts['noplaylist'] = True
+                        # Also try with different extractor args for playlists
+                        info_opts['extractor_args'] = {
+                            'youtube': {
+                                'player_client': ['mweb', 'ios'],
+                                'player_skip': ['webpage'],
+                            }
+                        }
+                    
                     info = info_ydl.extract_info(url, download=False)
+                    
+                    # Check if it's still a playlist entry
+                    if info.get('_type') == 'playlist':
+                        st.warning("⚠️ This is a playlist. Downloading the first video only.")
+                        entries = info.get('entries', [])
+                        if entries:
+                            # Get first video from playlist
+                            first_video = entries[0]
+                            if first_video:
+                                info = first_video
+                                url = first_video.get('url') or url
+                                st.info(f"📹 Extracted video: {info.get('title', 'Unknown')}")
+                    
                     title = info.get('title', 'Unknown')
                     st.write(f"📥 Starting download for: {title}")
                     
@@ -400,9 +431,56 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                             st.warning("  ⚠️ Could not find combined format, will use format selector (may need merging)")
                     
                 except Exception as e:
-                    st.error(f"❌ Error extracting video info: {str(e)}")
+                    error_str = str(e)
                     logger.error(f"Info extraction error: {e}")
-                    return False
+                    
+                    # Check if it's a playlist JSON error
+                    if 'playlist' in error_str.lower() or 'PLY_' in error_str or 'JSONDecodeError' in error_str:
+                        st.warning("⚠️ Playlist extraction failed. Trying to extract individual video...")
+                        try:
+                            # Force single video extraction
+                            info_opts['noplaylist'] = True
+                            info_opts['extract_flat'] = False
+                            # Try with simpler extractor args
+                            info_opts['extractor_args'] = {
+                                'youtube': {
+                                    'player_client': ['mweb'],
+                                }
+                            }
+                            
+                            # Extract video ID from URL if it's a playlist URL
+                            video_id_match = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', url)
+                            if video_id_match:
+                                video_id = video_id_match.group(1)
+                                video_url = f"https://www.youtube.com/watch?v={video_id}"
+                                st.info(f"🔄 Trying direct video URL: {video_url}")
+                                
+                                with yt_dlp.YoutubeDL(info_opts) as retry_ydl:
+                                    info = retry_ydl.extract_info(video_url, download=False)
+                                    url = video_url  # Update URL for download
+                                    title = info.get('title', 'Unknown')
+                                    st.write(f"📥 Starting download for: {title}")
+                            else:
+                                # Try with noplaylist flag
+                                with yt_dlp.YoutubeDL(info_opts) as retry_ydl:
+                                    info = retry_ydl.extract_info(url, download=False)
+                                    title = info.get('title', 'Unknown')
+                                    st.write(f"📥 Starting download for: {title}")
+                        except Exception as retry_e:
+                            st.error(f"❌ Error extracting video info: {str(retry_e)}")
+                            st.error("""
+                            **Troubleshooting steps:**
+                            1. **Update yt-dlp**: `pip install --upgrade yt-dlp`
+                            2. **Try a direct video URL** instead of playlist URL
+                            3. **Check if the video is available** and not restricted
+                            4. **Wait a few minutes** and try again (rate limiting)
+                            """)
+                            logger.error(f"Retry extraction error: {retry_e}")
+                            return False
+                    else:
+                        st.error(f"❌ Error extracting video info: {error_str}")
+                        st.info("💡 Try updating yt-dlp: `pip install --upgrade yt-dlp`")
+                        return False
             
             # Now perform the actual download with the selected format
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
