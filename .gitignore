@@ -38,3 +38,7 @@ downloads/
 # Environment variables
 .env
 .env.local
+
+# Cookies (optional - users can add their own)
+# cookies.txt
+# .streamlit/cookies.txt

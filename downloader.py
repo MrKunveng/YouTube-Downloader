@@ -241,27 +241,40 @@ def extract_video_id_from_url(url):
 
 def download_content(url: str, output_path: str, download_type: str = 'video', quality: int = None, download_folder: str = None):
     """Download video or audio content."""
+    # Enhanced logging for cloud mode debugging
+    logger.info(f"Cloud mode: {IS_CLOUD_DEPLOYMENT}")
+    logger.info(f"Download type: {download_type}, Quality: {quality}")
+    
     # Check yt-dlp version on first download attempt
     check_yt_dlp_version()
     
     ffmpeg_path = check_ffmpeg()
+    logger.info(f"ffmpeg path: {ffmpeg_path}")
+    
     if not ffmpeg_path:
         show_ffmpeg_instructions()
         return False
 
     try:
-        # Use selected download folder or default to temp_downloads
-        if download_folder and os.path.exists(download_folder) and os.access(download_folder, os.W_OK):
-            # Use absolute path for download folder
+        # In cloud mode, always use /tmp and ignore custom download folder
+        if IS_CLOUD_DEPLOYMENT:
+            temp_dir = Path("/tmp")
+            is_custom_folder = False
+            logger.info("Cloud mode: Using /tmp for downloads")
+        elif download_folder and os.path.exists(download_folder) and os.access(download_folder, os.W_OK):
+            # Use absolute path for download folder (local mode only)
             temp_dir = Path(download_folder).resolve()
             is_custom_folder = True
+            logger.info(f"Local mode: Using custom folder: {temp_dir}")
         else:
-            # Use absolute path for temp directory
+            # Use absolute path for temp directory (local mode)
             temp_dir = Path("temp_downloads").resolve()
             is_custom_folder = False
+            logger.info(f"Local mode: Using temp directory: {temp_dir}")
         
         # Ensure directory exists
         temp_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Download folder: {temp_dir}")
         
         # Progress tracking
         progress_bar = st.progress(0)
@@ -271,10 +284,20 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
         # Configure yt-dlp options with improved settings for better compatibility
         # Use absolute path for output template
         output_template = str(temp_dir / '%(title)s.%(ext)s')
-        logger.info(f"Download location: {temp_dir}")
         logger.info(f"Output template: {output_template}")
-        if is_custom_folder:
+        if is_custom_folder and not IS_CLOUD_DEPLOYMENT:
             st.info(f"📁 Files will be saved to: {temp_dir}")
+        elif IS_CLOUD_DEPLOYMENT:
+            st.info("☁️ Cloud mode: Files will be temporarily stored in /tmp")
+        
+        # Check for cookies file (optional but recommended for cloud)
+        cookies_file = None
+        if os.path.exists('cookies.txt'):
+            cookies_file = 'cookies.txt'
+            logger.info("Found cookies.txt - will use for authentication")
+        elif os.path.exists('.streamlit/cookies.txt'):
+            cookies_file = '.streamlit/cookies.txt'
+            logger.info("Found cookies.txt in .streamlit folder")
         
         ydl_opts = {
             'outtmpl': output_template,
@@ -327,6 +350,11 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                 'ffmpeg': ['-timeout', '30000000']  # 30 second timeout
             }
         }
+        
+        # Add cookies if available (helps with cloud IP blocking)
+        if cookies_file:
+            ydl_opts['cookiefile'] = cookies_file
+            logger.info(f"Using cookies file: {cookies_file}")
 
         # Only set ffmpeg_location if it's a specific path, not just 'ffmpeg'
         if ffmpeg_path != 'ffmpeg':
