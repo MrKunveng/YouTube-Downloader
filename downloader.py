@@ -183,26 +183,60 @@ def check_yt_dlp_version():
 
 def extract_video_id_from_url(url):
     """Extract video ID from various YouTube URL formats."""
+    if not url:
+        return None
+    
+    # Log the URL for debugging
+    logger.info(f"Extracting video ID from URL: {url}")
+    
     # Standard watch URL: https://www.youtube.com/watch?v=VIDEO_ID
+    # Also handles: watch?v=VIDEO_ID&list=...
     match = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', url)
     if match:
-        return match.group(1)
+        video_id = match.group(1)
+        logger.info(f"Found video ID (watch format): {video_id}")
+        return video_id
     
-    # Short URL: https://youtu.be/VIDEO_ID
+    # Short URL: https://youtu.be/VIDEO_ID or https://youtu.be/VIDEO_ID?t=...
     match = re.search(r'youtu\.be/([a-zA-Z0-9_-]{11})', url)
     if match:
-        return match.group(1)
+        video_id = match.group(1)
+        logger.info(f"Found video ID (short format): {video_id}")
+        return video_id
     
     # Embed URL: https://www.youtube.com/embed/VIDEO_ID
     match = re.search(r'/embed/([a-zA-Z0-9_-]{11})', url)
     if match:
-        return match.group(1)
+        video_id = match.group(1)
+        logger.info(f"Found video ID (embed format): {video_id}")
+        return video_id
     
     # Mobile URL: https://m.youtube.com/watch?v=VIDEO_ID
     match = re.search(r'm\.youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})', url)
     if match:
-        return match.group(1)
+        video_id = match.group(1)
+        logger.info(f"Found video ID (mobile format): {video_id}")
+        return video_id
     
+    # Playlist URL with video: https://www.youtube.com/playlist?list=...&v=VIDEO_ID
+    match = re.search(r'playlist[^&]*[&]v=([a-zA-Z0-9_-]{11})', url)
+    if match:
+        video_id = match.group(1)
+        logger.info(f"Found video ID (playlist with v param): {video_id}")
+        return video_id
+    
+    # Try to find any 11-character alphanumeric string that looks like a video ID
+    # This is a fallback for unusual URL formats
+    match = re.search(r'([a-zA-Z0-9_-]{11})', url)
+    if match:
+        potential_id = match.group(1)
+        # Basic validation: YouTube video IDs are 11 characters
+        # Check if it's in a context that suggests it's a video ID
+        if any(pattern in url for pattern in ['watch', 'youtu.be', 'embed', 'v=']):
+            logger.info(f"Found potential video ID (fallback): {potential_id}")
+            return potential_id
+    
+    logger.warning(f"Could not extract video ID from URL: {url}")
     return None
 
 def download_content(url: str, output_path: str, download_type: str = 'video', quality: int = None, download_folder: str = None):
@@ -387,10 +421,11 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
             info_opts['no_warnings'] = True
             
             # Extract video ID FIRST before any extraction attempts to avoid playlist JSON errors
-            is_playlist = 'list=' in url or '/playlist' in url
+            is_playlist = 'list=' in url.lower() or '/playlist' in url.lower()
             original_url = url
             
             # If it's a playlist URL, extract video ID and use direct video URL immediately
+            video_id = None
             if is_playlist:
                 st.info("📋 Playlist detected. Extracting video ID...")
                 video_id = extract_video_id_from_url(url)
@@ -402,8 +437,26 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                     # Ensure noplaylist is set
                     info_opts['noplaylist'] = True
                 else:
-                    st.warning("⚠️ Could not extract video ID from playlist URL. Will try with noplaylist flag...")
-                    info_opts['noplaylist'] = True
+                    st.warning("⚠️ Could not extract video ID from playlist URL.")
+                    st.info("💡 Trying alternative extraction methods...")
+                    
+                    # Try to extract from URL parameters more aggressively
+                    # Sometimes video ID might be in different parameter positions
+                    url_parts = url.split('&')
+                    for part in url_parts:
+                        if 'v=' in part:
+                            potential_id = part.split('v=')[-1].split('&')[0].split('?')[0].strip()
+                            if len(potential_id) == 11 and re.match(r'^[a-zA-Z0-9_-]+$', potential_id):
+                                video_id = potential_id
+                                url = f"https://www.youtube.com/watch?v={video_id}"
+                                st.success(f"✅ Found video ID in URL parameters: {video_id}")
+                                st.info(f"🔄 Using direct video URL")
+                                info_opts['noplaylist'] = True
+                                break
+                    
+                    if not video_id:
+                        st.warning("⚠️ Will try with noplaylist flag (may still fail if playlist parsing is required)...")
+                        info_opts['noplaylist'] = True
             
             with yt_dlp.YoutubeDL(info_opts) as info_ydl:
                 try:
@@ -477,6 +530,36 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                             # Extract video ID from original URL (before any modifications)
                             video_id = extract_video_id_from_url(original_url if 'original_url' in locals() else url)
                             
+                            # If still no video ID, try more aggressive extraction
+                            if not video_id:
+                                st.info("🔍 Trying alternative extraction methods...")
+                                # Try parsing URL manually
+                                url_to_parse = original_url if 'original_url' in locals() else url
+                                
+                                # Method 1: Split by & and look for v= parameter
+                                for param in url_to_parse.split('&'):
+                                    if 'v=' in param:
+                                        potential_id = param.split('v=')[-1].split('?')[0].strip()
+                                        if len(potential_id) == 11 and re.match(r'^[a-zA-Z0-9_-]+$', potential_id):
+                                            video_id = potential_id
+                                            st.info(f"✅ Found video ID using parameter parsing: {video_id}")
+                                            break
+                                
+                                # Method 2: Look for 11-character alphanumeric strings after common patterns
+                                if not video_id:
+                                    patterns = [
+                                        r'watch\?[^&]*v=([a-zA-Z0-9_-]{11})',
+                                        r'youtu\.be/([a-zA-Z0-9_-]{11})',
+                                        r'/v/([a-zA-Z0-9_-]{11})',
+                                        r'video_id=([a-zA-Z0-9_-]{11})',
+                                    ]
+                                    for pattern in patterns:
+                                        match = re.search(pattern, url_to_parse)
+                                        if match:
+                                            video_id = match.group(1)
+                                            st.info(f"✅ Found video ID using pattern matching: {video_id}")
+                                            break
+                            
                             if video_id:
                                 # Use direct video URL with noplaylist
                                 direct_video_url = f"https://www.youtube.com/watch?v={video_id}"
@@ -499,12 +582,16 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                                     st.write(f"📥 Starting download for: {title}")
                             else:
                                 st.error("❌ Could not extract video ID from URL")
+                                st.error(f"**URL provided:** {original_url if 'original_url' in locals() else url}")
                                 st.error("""
                                 **Troubleshooting steps:**
-                                1. **Use a direct video URL** (not playlist URL): `https://www.youtube.com/watch?v=VIDEO_ID`
+                                1. **Copy the direct video URL** from YouTube (not playlist URL)
+                                   - Right-click the video → Copy video URL
+                                   - Format: `https://www.youtube.com/watch?v=VIDEO_ID`
                                 2. **Update yt-dlp**: `pip install --upgrade yt-dlp`
                                 3. **Check if the video is available** and not restricted
                                 4. **Wait a few minutes** and try again (rate limiting)
+                                5. **Try a different video** to see if the issue is specific to this video
                                 """)
                                 return False
                         except Exception as retry_e:
