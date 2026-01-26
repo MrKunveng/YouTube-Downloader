@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: youtube-downloader
+    env: python
+    buildCommand: pip install -r requirements.txt && apt-get update && apt-get install -y ffmpeg
+    startCommand: streamlit run downloader.py --server.port=$PORT --server.address=0.0.0.0
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+    healthCheckPath: /_stcore/health

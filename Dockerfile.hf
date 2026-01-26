@@ -1,0 +1,20 @@
+# Dockerfile for Hugging Face Spaces
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy requirements and install
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application
+COPY downloader.py .
+
+# Run Streamlit
+# HF Spaces uses PORT env var, default to 7860
+CMD streamlit run downloader.py --server.port=${PORT:-7860} --server.address=0.0.0.0
