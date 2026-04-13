@@ -9,239 +9,366 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Cloud deployment configuration
-# Detects if running in cloud (Streamlit Cloud, Hugging Face Spaces, Replit, etc.)
+# Cloud deployment detection
+# Streamlit Cloud sets STREAMLIT_SHARING_MODE or runs headless without HOME set to user dir
 IS_CLOUD_DEPLOYMENT = (
-    os.environ.get('STREAMLIT_SERVER_HEADLESS', 'false').lower() == 'true' or
-    os.environ.get('SPACE_ID') is not None or  # Hugging Face Spaces
-    os.environ.get('REPL_ID') is not None  # Replit
+    os.environ.get('STREAMLIT_SHARING_MODE') is not None or          # Streamlit Cloud
+    os.environ.get('STREAMLIT_SERVER_HEADLESS', '').lower() == 'true' or
+    os.environ.get('SPACE_ID') is not None or                         # Hugging Face Spaces
+    os.environ.get('REPL_ID') is not None or                          # Replit
+    os.environ.get('RAILWAY_ENVIRONMENT') is not None or              # Railway
+    os.environ.get('RENDER') is not None                              # Render
 )
 
-def validate_path(path: str) -> Path:
-    """Validate and return a safe path for downloads."""
-    try:
-        # In cloud environment, always use temp directory
-        if IS_CLOUD_DEPLOYMENT:
-            return Path("/tmp")
-        # Use a relative path instead of home directory for local
-        return Path("downloads")
-    except Exception:
-        return Path("downloads")
+# Use /tmp for cloud; temp_downloads/ locally
+CLOUD_TEMP_DIR = Path("/tmp/yt_downloads")
+LOCAL_TEMP_DIR = Path("temp_downloads")
+
+
+# ─────────────────────────────────────────────
+# Custom CSS — dark YouTube-inspired theme
+# ─────────────────────────────────────────────
+CUSTOM_CSS = """
+<style>
+/* ── Global ── */
+html, body, [class*="css"] {
+    font-family: 'Segoe UI', Roboto, Arial, sans-serif;
+}
+
+/* ── Page background ── */
+.stApp {
+    background: linear-gradient(135deg, #0f0f0f 0%, #1a1a2e 50%, #0f0f0f 100%);
+    min-height: 100vh;
+}
+
+/* ── Hero banner ── */
+.hero-banner {
+    background: linear-gradient(90deg, #ff0000 0%, #cc0000 50%, #990000 100%);
+    border-radius: 16px;
+    padding: 2.5rem 2rem;
+    margin-bottom: 2rem;
+    text-align: center;
+    box-shadow: 0 8px 32px rgba(255, 0, 0, 0.35);
+    position: relative;
+    overflow: hidden;
+}
+.hero-banner::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at 30% 50%, rgba(255,255,255,0.08) 0%, transparent 60%);
+}
+.hero-banner h1 {
+    font-size: 2.8rem;
+    font-weight: 800;
+    color: #ffffff;
+    margin: 0;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    letter-spacing: -0.5px;
+}
+.hero-banner p {
+    color: rgba(255,255,255,0.85);
+    font-size: 1.05rem;
+    margin-top: 0.5rem;
+}
+
+/* ── Badge ── */
+.mode-badge {
+    display: inline-block;
+    background: rgba(255,255,255,0.2);
+    border: 1px solid rgba(255,255,255,0.35);
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 0.8rem;
+    color: #fff;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    margin-top: 0.75rem;
+}
+
+/* ── Section cards ── */
+.section-card {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 14px;
+    padding: 1.5rem;
+    margin-bottom: 1.25rem;
+    backdrop-filter: blur(6px);
+    transition: border-color 0.2s;
+}
+.section-card:hover {
+    border-color: rgba(255, 0, 0, 0.4);
+}
+.section-title {
+    font-size: 0.9rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: #ff4444;
+    margin-bottom: 0.75rem;
+}
+
+/* ── Inputs ── */
+input[type="text"], .stTextInput input {
+    background: rgba(255,255,255,0.06) !important;
+    border: 1.5px solid rgba(255,255,255,0.15) !important;
+    border-radius: 10px !important;
+    color: #fff !important;
+    padding: 0.6rem 1rem !important;
+    transition: border-color 0.2s !important;
+}
+input[type="text"]:focus, .stTextInput input:focus {
+    border-color: #ff4444 !important;
+    box-shadow: 0 0 0 3px rgba(255, 68, 68, 0.18) !important;
+}
+
+/* ── Select boxes ── */
+.stSelectbox > div > div {
+    background: rgba(255,255,255,0.06) !important;
+    border: 1.5px solid rgba(255,255,255,0.15) !important;
+    border-radius: 10px !important;
+    color: #fff !important;
+}
+
+/* ── Primary button ── */
+.stButton > button[kind="primary"],
+.stFormSubmitButton > button {
+    background: linear-gradient(135deg, #ff2222, #cc0000) !important;
+    color: #fff !important;
+    border: none !important;
+    border-radius: 10px !important;
+    font-size: 1rem !important;
+    font-weight: 700 !important;
+    padding: 0.65rem 2rem !important;
+    letter-spacing: 0.3px !important;
+    box-shadow: 0 4px 16px rgba(255,0,0,0.35) !important;
+    transition: all 0.2s ease !important;
+}
+.stButton > button[kind="primary"]:hover,
+.stFormSubmitButton > button:hover {
+    background: linear-gradient(135deg, #ff4444, #e60000) !important;
+    box-shadow: 0 6px 24px rgba(255,0,0,0.5) !important;
+    transform: translateY(-1px) !important;
+}
+
+/* ── Download button ── */
+.stDownloadButton > button {
+    background: linear-gradient(135deg, #1db954, #15803d) !important;
+    color: #fff !important;
+    border: none !important;
+    border-radius: 10px !important;
+    font-size: 1rem !important;
+    font-weight: 700 !important;
+    padding: 0.65rem 1.5rem !important;
+    box-shadow: 0 4px 16px rgba(29,185,84,0.3) !important;
+    transition: all 0.2s ease !important;
+    width: 100% !important;
+}
+.stDownloadButton > button:hover {
+    box-shadow: 0 6px 24px rgba(29,185,84,0.5) !important;
+    transform: translateY(-1px) !important;
+}
+
+/* ── Progress bar ── */
+.stProgress > div > div {
+    background: linear-gradient(90deg, #ff2222, #ff6b6b) !important;
+    border-radius: 6px !important;
+}
+.stProgress > div {
+    background: rgba(255,255,255,0.08) !important;
+    border-radius: 6px !important;
+}
+
+/* ── Alert/info boxes ── */
+.stAlert {
+    border-radius: 10px !important;
+    border-left-width: 4px !important;
+}
+
+/* ── Expander ── */
+.streamlit-expanderHeader {
+    background: rgba(255,255,255,0.04) !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+}
+
+/* ── Metric cards ── */
+.metric-card {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 12px;
+    padding: 1rem;
+    text-align: center;
+}
+.metric-value {
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: #ff4444;
+}
+.metric-label {
+    font-size: 0.78rem;
+    color: rgba(255,255,255,0.55);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+
+/* ── Divider ── */
+hr {
+    border-color: rgba(255,255,255,0.08) !important;
+    margin: 1.5rem 0 !important;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #111; }
+::-webkit-scrollbar-thumb { background: #ff3333; border-radius: 3px; }
+
+/* ── Footer ── */
+.footer {
+    text-align: center;
+    color: rgba(255,255,255,0.3);
+    font-size: 0.78rem;
+    padding: 2rem 0 1rem;
+    border-top: 1px solid rgba(255,255,255,0.07);
+    margin-top: 3rem;
+}
+</style>
+"""
+
 
 def check_ffmpeg():
     """Check if ffmpeg is installed and accessible."""
+    import subprocess
     try:
-        # In cloud environment, ffmpeg should be available via packages.txt
-        if IS_CLOUD_DEPLOYMENT:
-            import subprocess
-            try:
-                subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
-                return 'ffmpeg'
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                return None
-        
-        # Local environment checks
-        if platform.system() == "Windows":
-            # Check in current directory and PATH
-            ffmpeg_paths = [
-                Path.cwd() / "ffmpeg.exe",
-                Path.cwd() / "ffmpeg" / "bin" / "ffmpeg.exe",
-                Path.home() / "ffmpeg" / "bin" / "ffmpeg.exe",
-            ]
-            for path in ffmpeg_paths:
-                if path.exists():
-                    return str(path)
-            
-            # Check if available in PATH
-            import subprocess
-            try:
-                subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
-                return 'ffmpeg'
-            except subprocess.CalledProcessError:
-                return None
-        else:
-            # For Linux and macOS
-            import subprocess
-            try:
-                subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
-                return 'ffmpeg'
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                return None
-    except Exception:
-        return None
+        subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+        return 'ffmpeg'
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    if platform.system() == "Windows":
+        ffmpeg_paths = [
+            Path.cwd() / "ffmpeg.exe",
+            Path.cwd() / "ffmpeg" / "bin" / "ffmpeg.exe",
+            Path.home() / "ffmpeg" / "bin" / "ffmpeg.exe",
+        ]
+        for path in ffmpeg_paths:
+            if path.exists():
+                return str(path)
+    return None
+
 
 def show_ffmpeg_instructions():
     """Show instructions for installing ffmpeg."""
+    st.error("❌ FFmpeg is required but not found on this system.")
     if IS_CLOUD_DEPLOYMENT:
-        st.error("❌ FFmpeg is not available in the cloud environment. Please contact support.")
-        return
-    
-    st.error("❌ FFmpeg is required but not found!")
-    
+        st.info("Make sure `packages.txt` contains `ffmpeg` in the repository root.")
+        st.stop()
+
     system = platform.system()
     if system == "Windows":
         st.markdown("""
-        ### FFmpeg Installation Instructions for Windows:
-        
-        **Option 1: Direct Download**
-        1. Download FFmpeg from [here](https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip)
-        2. Extract the zip file
-        3. Copy the `ffmpeg.exe` file from the `bin` folder to your YouTube Downloader folder
-        
-        **Option 2: Using Chocolatey**
-        ```powershell
-        choco install ffmpeg
-        ```
-        """)
-    elif system == "Darwin":  # macOS
+**Windows** — download from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) and place
+`ffmpeg.exe` in this folder, or run:
+```powershell
+choco install ffmpeg
+```
+""")
+    elif system == "Darwin":
         st.markdown("""
-        ### FFmpeg Installation Instructions for macOS:
-        
-        **Option 1: Using Homebrew (Recommended)**
-        ```bash
-        brew install ffmpeg
-        ```
-        
-        **Option 2: Using MacPorts**
-        ```bash
-        sudo port install ffmpeg
-        ```
-        """)
-    else:  # Linux
+**macOS** — install via Homebrew:
+```bash
+brew install ffmpeg
+```
+""")
+    else:
         st.markdown("""
-        ### FFmpeg Installation Instructions for Linux:
-        
-        **For Ubuntu/Debian:**
-        ```bash
-        sudo apt update
-        sudo apt install ffmpeg
-        ```
-        
-        **For Fedora:**
-        ```bash
-        sudo dnf install ffmpeg
-        ```
-        
-        **For Arch Linux:**
-        ```bash
-        sudo pacman -S ffmpeg
-        ```
-        """)
-    
-    st.markdown("""
-    After installing:
-    1. Close this application
-    2. Restart your terminal/command prompt
-    3. Run the application again
-    """)
-    st.stop()  # Stop the app here to prevent further execution
+**Linux** — install via package manager:
+```bash
+sudo apt update && sudo apt install ffmpeg   # Debian/Ubuntu
+sudo dnf install ffmpeg                       # Fedora
+sudo pacman -S ffmpeg                         # Arch
+```
+""")
+    st.stop()
+
 
 def select_best_format_with_audio(formats, quality=None):
-    """Manually select the best format that has both video and audio."""
-    # Filter formats that have both video and audio
-    combined_formats = [
-        f for f in formats 
+    """Return the best combined (video+audio) format, optionally filtered by quality."""
+    combined = [
+        f for f in formats
         if f.get('vcodec') != 'none' and f.get('acodec') != 'none'
     ]
-    
-    if not combined_formats:
+    if not combined:
         return None
-    
-    # Filter by quality if specified
     if quality:
-        quality_formats = [
-            f for f in combined_formats 
-            if f.get('height') and f.get('height') <= quality
-        ]
-        if quality_formats:
-            combined_formats = quality_formats
-    
-    # Sort by height (quality) descending, then by filesize
-    combined_formats.sort(
-        key=lambda x: (
-            x.get('height', 0) or 0,
-            x.get('filesize', 0) or 0
-        ),
-        reverse=True
-    )
-    
-    return combined_formats[0] if combined_formats else None
+        filtered = [f for f in combined if (f.get('height') or 0) <= quality]
+        if filtered:
+            combined = filtered
+    combined.sort(key=lambda x: ((x.get('height') or 0), (x.get('filesize') or 0)), reverse=True)
+    return combined[0]
 
-def download_content(url: str, output_path: str, download_type: str = 'video', quality: int = None, download_folder: str = None):
-    """Download video or audio content."""
+
+def download_content(url: str, download_type: str = 'video', quality: int = None, download_folder: str = None):
+    """Download video or audio. Returns True on success."""
     ffmpeg_path = check_ffmpeg()
     if not ffmpeg_path:
         show_ffmpeg_instructions()
         return False
 
     try:
-        # Use selected download folder or default to temp_downloads
-        if download_folder and os.path.exists(download_folder) and os.access(download_folder, os.W_OK):
-            # Use absolute path for download folder
+        # Determine output directory
+        if download_folder and os.path.isdir(download_folder) and os.access(download_folder, os.W_OK):
             temp_dir = Path(download_folder).resolve()
             is_custom_folder = True
-        else:
-            # Use absolute path for temp directory
-            temp_dir = Path("temp_downloads").resolve()
+        elif IS_CLOUD_DEPLOYMENT:
+            temp_dir = CLOUD_TEMP_DIR
             is_custom_folder = False
-        
-        # Ensure directory exists
+        else:
+            temp_dir = LOCAL_TEMP_DIR.resolve()
+            is_custom_folder = False
+
         temp_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Progress tracking
+
         progress_bar = st.progress(0)
         status_text = st.empty()
         downloaded_file = None
 
-        # Configure yt-dlp options with improved settings for better compatibility
-        # Use absolute path for output template
         output_template = str(temp_dir / '%(title)s.%(ext)s')
-        logger.info(f"Download location: {temp_dir}")
-        logger.info(f"Output template: {output_template}")
-        if is_custom_folder:
-            st.info(f"📁 Files will be saved to: {temp_dir}")
-        
+        logger.info(f"Download dir: {temp_dir}")
+
         ydl_opts = {
             'outtmpl': output_template,
-            'quiet': False,
-            'no_warnings': False,
+            'quiet': True,
+            'no_warnings': True,
             'progress': True,
             'prefer_ffmpeg': True,
             'ignoreerrors': False,
             'nooverwrites': False,
-            'writesubtitles': False,
-            'writeautomaticsub': False,
             'skip_unavailable_fragments': True,
-            'ignore_no_formats_error': False,  # Changed to False to catch errors properly
             'extractor_retries': 5,
             'fragment_retries': 5,
             'retries': 5,
             'socket_timeout': 30,
             'extract_flat': False,
-            # Use multiple clients to get best format availability
-            # iOS and Android clients often have better format options
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['ios', 'android', 'web'],  # Try ios first (best formats), then android, then web
+                    'player_client': ['ios', 'android', 'web'],
                     'player_skip': ['webpage', 'configs'],
                 }
             },
-            # Add user agent and cookies to avoid 403 errors
             'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                'User-Agent': (
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/120.0.0.0 Safari/537.36'
+                )
             },
-            # Don't force external downloader - let yt-dlp handle merging properly
-            # Only use ffmpeg for HLS streams if needed
-            'external_downloader_args': {
-                'ffmpeg': ['-timeout', '30000000']  # 30 second timeout
-            }
         }
 
-        # Only set ffmpeg_location if it's a specific path, not just 'ffmpeg'
         if ffmpeg_path != 'ffmpeg':
             ydl_opts['ffmpeg_location'] = ffmpeg_path
 
-        # Configure format based on download type with more robust selection
+        # Format selection
         if download_type == 'audio':
             ydl_opts.update({
                 'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
@@ -251,503 +378,314 @@ def download_content(url: str, output_path: str, download_type: str = 'video', q
                     'preferredquality': '192',
                 }],
             })
-        else:  # video
-            # CRITICAL: Use format selector that EXPLICITLY requires audio
-            # Format syntax: acodec!=none means format MUST have audio
-            if quality:
-                # Prioritize combined formats with audio at specified quality
-                format_selector = (
-                    f'best[height<={quality}][acodec!=none][vcodec!=none][ext=mp4]/'  # Best combined mp4 with audio
-                    f'best[height<={quality}][acodec!=none][vcodec!=none]/'  # Best combined with audio (any ext)
-                    f'bestvideo[height<={quality}][vcodec!=none]+bestaudio[acodec!=none]/'  # Merge video + audio
-                    f'bestvideo[height<={quality}][vcodec!=none]+bestaudio[acodec!=none][ext=m4a]/'  # Merge with m4a
-                    f'bestvideo[height<={quality}][vcodec!=none]+bestaudio[acodec!=none][ext=webm]/'  # Merge with webm
-                    f'worst[height<={quality}][acodec!=none][vcodec!=none]'  # Worst but with audio
-                )
-            else:
-                # For best quality: explicitly require audio in all formats
-                format_selector = (
-                    'best[acodec!=none][vcodec!=none][ext=mp4]/'  # Best combined mp4 with audio
-                    'best[acodec!=none][vcodec!=none]/'  # Best combined with audio (any ext)
-                    'bestvideo[vcodec!=none]+bestaudio[acodec!=none]/'  # Merge best video + best audio
-                    'bestvideo[vcodec!=none][ext=mp4]+bestaudio[acodec!=none][ext=m4a]/'  # Merge mp4 + m4a
-                    'bestvideo[vcodec!=none]+bestaudio[acodec!=none][ext=m4a]/'  # Best video + m4a audio
-                    'bestvideo[vcodec!=none]+bestaudio[acodec!=none][ext=webm]/'  # Best video + webm audio
-                    'best[acodec!=none][vcodec!=none]'  # Final fallback with audio
-                )
-            
-            # Configure format and ensure proper merging
+        else:
+            q = f'[height<={quality}]' if quality else ''
+            format_selector = (
+                f'best{q}[acodec!=none][vcodec!=none][ext=mp4]/'
+                f'best{q}[acodec!=none][vcodec!=none]/'
+                f'bestvideo{q}[vcodec!=none]+bestaudio[acodec!=none]/'
+                f'bestvideo{q}[vcodec!=none]+bestaudio[acodec!=none][ext=m4a]/'
+                f'best{q}[acodec!=none][vcodec!=none]'
+            )
             ydl_opts.update({
                 'format': format_selector,
                 'merge_output_format': 'mp4',
             })
 
-        def cleanup_temp_files():
-            """Clean up temporary files after download"""
+        def cleanup_temp():
+            if is_custom_folder:
+                return
             try:
-                # Only cleanup if using default temp directory (not custom folder)
-                if not is_custom_folder:
-                    if downloaded_file and os.path.exists(downloaded_file):
-                        os.remove(downloaded_file)
-                    if temp_dir.exists() and temp_dir.name == "temp_downloads":
-                        for file in temp_dir.glob('*'):
-                            try:
-                                file.unlink()
-                            except Exception:
-                                pass
+                if downloaded_file and os.path.exists(downloaded_file):
+                    os.remove(downloaded_file)
+                if temp_dir.exists() and temp_dir != CLOUD_TEMP_DIR:
+                    for f in temp_dir.glob('*'):
                         try:
-                            temp_dir.rmdir()
+                            f.unlink()
                         except Exception:
                             pass
+                    try:
+                        temp_dir.rmdir()
+                    except Exception:
+                        pass
             except Exception as e:
-                logger.warning(f"Cleanup error: {e}")
+                logger.warning(f"Cleanup warning: {e}")
 
         def progress_hook(d):
             nonlocal downloaded_file
             if d['status'] == 'downloading':
                 try:
-                    total = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
-                    downloaded = d.get('downloaded_bytes', 0)
+                    total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
+                    done = d.get('downloaded_bytes', 0)
                     if total:
-                        progress = min(downloaded / total, 1.0)
-                        progress_bar.progress(progress)
-                        filename = os.path.basename(d.get('filename', ''))
-                        status_text.text(f"⏳ Downloading: {filename}")
+                        pct = min(done / total, 1.0)
+                        progress_bar.progress(pct)
+                    fname = os.path.basename(d.get('filename', ''))
+                    speed = d.get('_speed_str', '')
+                    eta = d.get('_eta_str', '')
+                    parts = [f"⏳ {fname}"]
+                    if speed:
+                        parts.append(f"🚀 {speed}")
+                    if eta:
+                        parts.append(f"⏱ ETA {eta}")
+                    status_text.text("  |  ".join(parts))
                 except Exception as e:
-                    logger.warning(f"Progress calculation error: {e}")
+                    logger.warning(f"Progress hook error: {e}")
             elif d['status'] == 'finished':
                 downloaded_file = d.get('filename', '')
-                filename = os.path.basename(downloaded_file)
-                status_text.text(f"✅ Processing: {filename}")
+                status_text.text(f"⚙️  Processing: {os.path.basename(downloaded_file)}")
                 progress_bar.progress(1.0)
 
         ydl_opts['progress_hooks'] = [progress_hook]
 
         try:
-            # First, extract info to validate URL and select best format
-            info_opts = ydl_opts.copy()
-            info_opts['quiet'] = True
-            info_opts['no_warnings'] = True
-            
+            # ── Extract info first ──────────────────────────
+            info_opts = {**ydl_opts, 'quiet': True, 'no_warnings': True}
             with yt_dlp.YoutubeDL(info_opts) as info_ydl:
                 try:
                     info = info_ydl.extract_info(url, download=False)
-                    title = info.get('title', 'Unknown')
-                    st.write(f"📥 Starting download for: {title}")
-                    
-                    # Check available formats and log them for debugging
-                    formats = info.get('formats', [])
-                    if formats:
-                        st.info(f"📊 Found {len(formats)} available formats")
-                        # Show formats with audio info
-                        video_formats = [f for f in formats if f.get('vcodec') != 'none']
-                        audio_formats = [f for f in formats if f.get('acodec') != 'none']
-                        combined_formats = [f for f in formats if f.get('vcodec') != 'none' and f.get('acodec') != 'none']
-                        
-                        st.write(f"  📹 Video-only: {len(video_formats)} | 🎵 Audio-only: {len(audio_formats)} | 🎬 Video+Audio: {len(combined_formats)}")
-                        
-                        # Show best combined formats available
-                        if combined_formats:
-                            best_combined = sorted(combined_formats, key=lambda x: x.get('height', 0) or 0, reverse=True)[:3]
-                            st.write("  🎯 Best combined formats available:")
-                            for fmt in best_combined:
-                                res = fmt.get('resolution', fmt.get('height', 'N/A'))
-                                ext = fmt.get('ext', 'N/A')
-                                st.write(f"    - {fmt.get('format_id', 'N/A')}: {res} ({ext})")
-                        
-                        # Manually select best format with audio if available
-                        # This ensures we always get a format with audio
-                        best_format = select_best_format_with_audio(formats, quality)
-                        if best_format:
-                            format_id = best_format.get('format_id')
-                            height = best_format.get('height', 'N/A')
-                            ext = best_format.get('ext', 'mp4')
-                            st.success(f"  ✅ Found best format: {format_id} ({height}p, {ext}) - has video and audio")
-                            # Don't override format selector - let yt-dlp handle format selection
-                            # The format selector will naturally pick this format if available
-                            # Overriding with specific format ID can cause "format not available" errors
-                        else:
-                            st.warning("  ⚠️ Could not find combined format, will use format selector (may need merging)")
-                    
                 except Exception as e:
-                    st.error(f"❌ Error extracting video info: {str(e)}")
-                    logger.error(f"Info extraction error: {e}")
+                    st.error(f"❌ Could not fetch video info: {e}")
+                    logger.error(f"Info extraction: {e}")
                     return False
-            
-            # Now perform the actual download with the selected format
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                
-                # Perform the actual download
-                download_success = False
-                try:
-                    ydl.download([url])
-                    download_success = True
-                except Exception as e:
-                    error_msg = str(e)
-                    st.warning(f"⚠️ Initial download attempt failed: {error_msg}")
-                    logger.warning(f"Download error: {e}")
-                    
-                    # Try multiple fallback approaches - all ensure video with audio
-                    # Build quality-aware format selector for fallbacks with explicit audio requirement
-                    quality_suffix = f'[height<={quality}]' if quality else ''
-                    fallback_format = (
-                        f'best{quality_suffix}[acodec!=none][vcodec!=none][ext=mp4]/'  # Best combined mp4 with audio
-                        f'best{quality_suffix}[acodec!=none][vcodec!=none]/'  # Best combined with audio
-                        f'bestvideo{quality_suffix}[vcodec!=none]+bestaudio[acodec!=none]/'  # Merge video+audio
-                        f'bestvideo{quality_suffix}[vcodec!=none]+bestaudio[acodec!=none][ext=m4a]/'  # Merge with m4a
-                        'bestvideo[vcodec!=none]+bestaudio[acodec!=none]/best[acodec!=none][vcodec!=none]'  # Final fallbacks
+
+            title = info.get('title', 'Unknown')
+            duration = info.get('duration', 0)
+            uploader = info.get('uploader', 'Unknown')
+            thumbnail = info.get('thumbnail')
+
+            # ── Video preview card ──────────────────────────
+            with st.container():
+                st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                col_thumb, col_info = st.columns([1, 2])
+                with col_thumb:
+                    if thumbnail:
+                        st.image(thumbnail, use_container_width=True)
+                with col_info:
+                    st.markdown(f"### {title}")
+                    st.markdown(
+                        f"**Channel:** {uploader}  \n"
+                        f"**Duration:** {int(duration // 60)}:{int(duration % 60):02d}  \n"
+                        f"**Type:** {'🎵 Audio (MP3)' if download_type == 'audio' else f'🎬 Video ({quality}p)' if quality else '🎬 Video (Best)'}"
                     )
-                    
-                    fallback_methods = [
-                        {
-                            'name': 'iOS client with video+audio',
-                            'opts': {
-                                'extractor_args': {
-                                    'youtube': {
-                                        'player_client': ['ios'],
-                                    }
-                                },
-                                'format': fallback_format,
-                                'merge_output_format': 'mp4',
-                                'external_downloader': None,
-                            }
-                        },
-                        {
-                            'name': 'Android client with video+audio',
-                            'opts': {
-                                'extractor_args': {
-                                    'youtube': {
-                                        'player_client': ['android'],
-                                    }
-                                },
-                                'format': fallback_format,
-                                'merge_output_format': 'mp4',
-                                'external_downloader': None,
-                            }
-                        },
-                        {
-                            'name': 'Web client with video+audio',
-                            'opts': {
-                                'extractor_args': {
-                                    'youtube': {
-                                        'player_client': ['web'],
-                                    }
-                                },
-                                'format': fallback_format,
-                                'merge_output_format': 'mp4',
-                                'external_downloader': None,
-                            }
-                        },
-                        {
-                            'name': 'Any available format with audio',
-                            'opts': {
-                                'format': 'bestvideo+bestaudio/best/worst',
-                                'merge_output_format': 'mp4',
-                                'ignore_no_formats_error': True,
-                                'external_downloader': None,
-                            }
-                        }
-                    ]
-                    
-                    for i, method in enumerate(fallback_methods):
-                        try:
-                            st.info(f"🔄 Trying fallback method {i+1}/{len(fallback_methods)}: {method['name']}...")
-                            fallback_opts = ydl_opts.copy()
-                            fallback_opts.update(method['opts'])
-                            
-                            with yt_dlp.YoutubeDL(fallback_opts) as fallback_ydl:
-                                fallback_ydl.download([url])
-                            download_success = True
-                            st.success(f"✅ Success with fallback method: {method['name']}")
-                            break
-                        except Exception as fallback_e:
-                            logger.warning(f"Fallback method {i+1} failed: {fallback_e}")
-                            if i == len(fallback_methods) - 1:
-                                st.error(f"❌ All download methods failed. Last error: {str(fallback_e)}")
-                                st.info("💡 Try updating yt-dlp: `pip install --upgrade yt-dlp`")
-                                return False
-                
-                # Check for downloaded file in download directory
-                if not downloaded_file:
-                    # Try to find the most recently created file in temp_dir
-                    try:
-                        # Look for video/audio files (common extensions)
-                        video_extensions = ['*.mp4', '*.webm', '*.mkv', '*.flv', '*.avi', '*.mov', '*.mp3', '*.m4a', '*.opus', '*.ogg']
-                        files = []
-                        for ext in video_extensions:
-                            files.extend(temp_dir.glob(ext))
-                        
-                        if files:
-                            # Get the most recently modified file
-                            downloaded_file = max(files, key=lambda p: p.stat().st_mtime)
-                            downloaded_file = str(downloaded_file.resolve())
-                        else:
-                            # Fallback: check all files
-                            all_files = [f for f in temp_dir.glob('*') if f.is_file()]
-                            if all_files:
-                                downloaded_file = max(all_files, key=lambda p: p.stat().st_mtime)
-                                downloaded_file = str(downloaded_file.resolve())
-                    except Exception as e:
-                        logger.warning(f"Could not find downloaded file: {e}")
-                
-                # Resolve file path to absolute
-                if downloaded_file:
-                    downloaded_file = str(Path(downloaded_file).resolve())
-                
-                if downloaded_file and os.path.exists(downloaded_file):
-                    file_size = os.path.getsize(downloaded_file) / (1024 * 1024)  # Convert to MB
-                    file_name = os.path.basename(downloaded_file)
-                    file_path = str(Path(downloaded_file).parent)
-                    
-                    # Show success message with file location
-                    if is_custom_folder:
-                        st.success(f"✅ Download completed! File saved to:")
-                        st.info(f"📁 Location: {file_path}")
-                        st.info(f"📄 File: {file_name} ({file_size:.1f} MB)")
-                        # Also provide download button for convenience
-                        try:
-                            with open(downloaded_file, 'rb') as f:
-                                file_data = f.read()
-                            st.download_button(
-                                label=f"⬇️ Download {file_name} ({file_size:.1f} MB)",
-                                data=file_data,
-                                file_name=file_name,
-                                mime='application/octet-stream'
-                            )
-                        except Exception as e:
-                            logger.warning(f"Could not create download button: {e}")
-                    else:
-                        # Create download button for temp files
-                        with open(downloaded_file, 'rb') as f:
-                            file_data = f.read()
-                        
-                        st.download_button(
-                            label=f"⬇️ Download {file_name} ({file_size:.1f} MB)",
-                            data=file_data,
-                            file_name=file_name,
-                            mime='application/octet-stream'
-                        )
-                        st.info(f"💡 File temporarily saved to: {file_path}")
-                    
-                    return True
-                elif download_success:
-                    # Download reported success but file not found - search more thoroughly
-                    st.warning("⚠️ Download reported success but file location unclear. Searching...")
-                    try:
-                        # Search for video/audio files
-                        video_extensions = ['*.mp4', '*.webm', '*.mkv', '*.flv', '*.avi', '*.mov', '*.mp3', '*.m4a', '*.opus', '*.ogg']
-                        files = []
-                        for ext in video_extensions:
-                            files.extend(temp_dir.glob(ext))
-                        
-                        if not files:
-                            # Check all files
-                            files = [f for f in temp_dir.glob('*') if f.is_file()]
-                        
-                        if files:
-                            latest_file = max(files, key=lambda p: p.stat().st_mtime)
-                            file_size = latest_file.stat().st_size / (1024 * 1024)
-                            file_path = str(latest_file.resolve())
-                            
-                            if is_custom_folder:
-                                st.success(f"✅ File found!")
-                                st.info(f"📁 Location: {str(latest_file.parent)}")
-                                st.info(f"📄 File: {latest_file.name} ({file_size:.1f} MB)")
-                                try:
-                                    with open(latest_file, 'rb') as f:
-                                        file_data = f.read()
-                                    st.download_button(
-                                        label=f"⬇️ Download {latest_file.name} ({file_size:.1f} MB)",
-                                        data=file_data,
-                                        file_name=latest_file.name,
-                                        mime='application/octet-stream'
-                                    )
-                                except Exception:
-                                    pass
-                            else:
-                                with open(latest_file, 'rb') as f:
-                                    file_data = f.read()
-                                st.download_button(
-                                    label=f"⬇️ Download {latest_file.name} ({file_size:.1f} MB)",
-                                    data=file_data,
-                                    file_name=latest_file.name,
-                                    mime='application/octet-stream'
-                                )
-                            return True
-                    except Exception as e:
-                        logger.error(f"Error finding file: {e}")
-                        st.error(f"❌ Could not locate downloaded file. Error: {str(e)}")
-                
-                st.error("❌ Download completed but file not found. This might be due to format issues.")
-                return False
-            
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            # ── Download ────────────────────────────────────
+            download_success = False
+            st.markdown("**Downloading…**")
+
+            fallback_opts_list = [
+                {
+                    'name': 'Primary (iOS + Android + Web)',
+                    'overrides': {}
+                },
+                {
+                    'name': 'Fallback — iOS only',
+                    'overrides': {
+                        'extractor_args': {'youtube': {'player_client': ['ios']}},
+                        'format': f'bestvideo[height<={quality}]+bestaudio/best' if quality else 'bestvideo+bestaudio/best',
+                        'merge_output_format': 'mp4',
+                    }
+                },
+                {
+                    'name': 'Fallback — any format',
+                    'overrides': {
+                        'format': 'bestvideo+bestaudio/best/worst',
+                        'merge_output_format': 'mp4',
+                        'ignore_no_formats_error': True,
+                    }
+                },
+            ]
+
+            for attempt in fallback_opts_list:
+                try:
+                    opts = {**ydl_opts, **attempt['overrides']}
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        ydl.download([url])
+                    download_success = True
+                    break
+                except Exception as e:
+                    logger.warning(f"Attempt '{attempt['name']}' failed: {e}")
+                    if attempt is fallback_opts_list[-1]:
+                        st.error(f"❌ All download attempts failed.\n\n`{e}`")
+                        st.info("💡 Try updating yt-dlp: `pip install --upgrade yt-dlp`")
+                        return False
+                    st.warning(f"⚠️ {attempt['name']} failed, retrying…")
+
+            # ── Locate downloaded file ──────────────────────
+            if not downloaded_file:
+                exts = ['*.mp4', '*.webm', '*.mkv', '*.mp3', '*.m4a', '*.opus', '*.ogg', '*.flv']
+                candidates = []
+                for ext in exts:
+                    candidates.extend(temp_dir.glob(ext))
+                if not candidates:
+                    candidates = [f for f in temp_dir.glob('*') if f.is_file()]
+                if candidates:
+                    latest = max(candidates, key=lambda p: p.stat().st_mtime)
+                    downloaded_file = str(latest.resolve())
+
+            if downloaded_file:
+                downloaded_file = str(Path(downloaded_file).resolve())
+
+            if downloaded_file and os.path.exists(downloaded_file):
+                file_size_mb = os.path.getsize(downloaded_file) / (1024 * 1024)
+                file_name = os.path.basename(downloaded_file)
+
+                progress_bar.progress(1.0)
+                status_text.empty()
+
+                st.success(f"✅ Ready! **{file_name}** ({file_size_mb:.1f} MB)")
+
+                with open(downloaded_file, 'rb') as fh:
+                    file_data = fh.read()
+
+                st.download_button(
+                    label=f"⬇️  Save  {file_name}  ({file_size_mb:.1f} MB)",
+                    data=file_data,
+                    file_name=file_name,
+                    mime='application/octet-stream',
+                    use_container_width=True,
+                )
+                if is_custom_folder:
+                    st.info(f"📁 Also saved to: `{os.path.dirname(downloaded_file)}`")
+                return True
+
+            if download_success:
+                st.error("❌ Download finished but the file could not be located.")
+            else:
+                st.error("❌ Download failed.")
             return False
 
         finally:
-            # Clean up temporary files only if not using custom folder
-            if not is_custom_folder:
-                cleanup_temp_files()
+            cleanup_temp()
 
     except Exception as e:
-        st.error(f"❌ Download failed: {str(e)}")
-        logger.error(f"Download error: {e}")
+        st.error(f"❌ Unexpected error: {e}")
+        logger.error(f"download_content error: {e}")
         return False
+
 
 def main():
     st.set_page_config(
-        page_title="YouTube Downloader", 
+        page_title="YT Downloader",
         page_icon="🎥",
-        layout="wide"
+        layout="centered",
+        initial_sidebar_state="collapsed",
     )
-    
-    # Title and description
-    st.title("🎥 YouTube Downloader")
-    
-    if IS_CLOUD_DEPLOYMENT:
+
+    # Inject CSS
+    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+    # ── Hero banner ──────────────────────────────────────────
+    mode_label = "☁️ Cloud Mode" if IS_CLOUD_DEPLOYMENT else "💻 Local Mode"
+    st.markdown(f"""
+<div class="hero-banner">
+    <h1>🎥 YouTube Downloader</h1>
+    <p>Download videos or extract audio — fast & free</p>
+    <span class="mode-badge">{mode_label}</span>
+</div>
+""", unsafe_allow_html=True)
+
+    # ── Sidebar info ─────────────────────────────────────────
+    with st.sidebar:
+        st.markdown("## ℹ️ About")
         st.markdown("""
-        Download videos or extract audio from YouTube
-        
-        ☁️ **Cloud Deployment Mode** - Files will be temporarily stored and available for download
-        """)
-    else:
-        st.markdown("""
-        Download videos or extract audio from YouTube
-        
-        💻 **Local Mode** - Choose a download folder or use the default temporary location
-        """)
-    
-    # Download folder selection (only show in local mode)
-    if not IS_CLOUD_DEPLOYMENT:
-        st.subheader("📁 Download Folder Selection")
-        
-        # Show common download locations
-        common_folders = {
-            "Downloads": os.path.expanduser("~/Downloads"),
-            "Desktop": os.path.expanduser("~/Desktop"),
-            "Documents": os.path.expanduser("~/Documents"),
-            "Custom Path": ""
-        }
-        
-        # Initialize session state with Downloads folder as default
-        if 'selected_folder' not in st.session_state:
-            # Set default to Downloads folder if it exists, otherwise empty
-            default_downloads = common_folders["Downloads"]
-            if os.path.exists(default_downloads) and os.path.isdir(default_downloads) and os.access(default_downloads, os.W_OK):
-                st.session_state.selected_folder = os.path.abspath(default_downloads)
-            else:
-                st.session_state.selected_folder = ""
-        
-        # Quick selection buttons
-        st.write("**Quick Select:**")
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            if st.button("📁 Downloads"):
-                st.session_state.selected_folder = common_folders["Downloads"]
-                st.rerun()
-        
-        with col2:
-            if st.button("🖥️ Desktop"):
-                st.session_state.selected_folder = common_folders["Desktop"]
-                st.rerun()
-        
-        with col3:
-            if st.button("📄 Documents"):
-                st.session_state.selected_folder = common_folders["Documents"]
-                st.rerun()
-        
-        with col4:
-            if st.button("🗂️ Custom"):
-                st.session_state.selected_folder = ""
-                st.rerun()
-        
-        # Manual path input
-        download_folder_input = st.text_input(
-            "📂 Download Folder Path:",
-            value=st.session_state.selected_folder,
-            placeholder="Enter full path (e.g., /Users/username/Downloads) or leave empty for temporary location",
-            help="Enter the full path to your desired download folder"
+This tool lets you download YouTube videos and audio directly from your browser.
+
+**Supported formats**
+- 🎬 MP4 Video (up to 1080p)
+- 🎵 MP3 Audio (192 kbps)
+
+**Notes**
+- Large files may take a minute to process
+- In cloud mode files are temporary; save them immediately after download
+""")
+        st.markdown("---")
+        ffmpeg_ok = check_ffmpeg() is not None
+        st.markdown(
+            f"**FFmpeg:** {'✅ Available' if ffmpeg_ok else '❌ Not found'}"
         )
-        
-        # Normalize and validate folder path
-        download_folder = None
-        
-        # Use input if provided, otherwise use session state (which has default Downloads)
-        folder_to_validate = download_folder_input.strip() if download_folder_input else st.session_state.selected_folder
-        
-        if folder_to_validate:
-            # Normalize the path (remove trailing slashes, expand user, etc.)
-            normalized_path = os.path.expanduser(folder_to_validate.strip())
-            normalized_path = os.path.normpath(normalized_path)
-            
-            # Validate folder path
-            if not os.path.exists(normalized_path):
-                st.error(f"❌ Selected folder does not exist: {normalized_path}")
-                st.info("💡 Try using the quick select buttons above, or leave empty to use temporary location")
-                # Reset to default if current selection is invalid
-                if normalized_path == st.session_state.selected_folder:
-                    default_downloads = common_folders["Downloads"]
-                    if os.path.exists(default_downloads) and os.path.isdir(default_downloads) and os.access(default_downloads, os.W_OK):
-                        st.session_state.selected_folder = os.path.abspath(default_downloads)
-                    else:
-                        st.session_state.selected_folder = ""
-            elif not os.path.isdir(normalized_path):
-                st.error(f"❌ Path is not a directory: {normalized_path}")
-            elif not os.access(normalized_path, os.W_OK):
-                st.error(f"❌ No write permission for selected folder: {normalized_path}")
-            else:
-                # Path is valid - use it
-                download_folder = normalized_path
-                abs_path = os.path.abspath(download_folder)
-                st.success(f"✅ Using folder: {abs_path}")
-                st.info("💡 Files will be saved directly to this folder and preserved.")
-                # Update session state with valid normalized path
-                st.session_state.selected_folder = abs_path
-        else:
-            st.info("💡 Files will be saved to a temporary location and can be downloaded via the download button.")
-            # Clear session state if empty
-            if st.session_state.selected_folder:
-                st.session_state.selected_folder = ""
-    else:
-        # Cloud mode - always use temp directory
-        download_folder = None
-        st.info("☁️ Cloud mode: Files will be temporarily stored and available for download")
-    
-    # Input fields in a clean layout
-    with st.form("download_form"):
-        youtube_url = st.text_input("🔗 Enter YouTube URL:")
-        
+        st.markdown(
+            f"**Deployment:** {'Cloud ☁️' if IS_CLOUD_DEPLOYMENT else 'Local 💻'}"
+        )
+
+    # ── Download form ─────────────────────────────────────────
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">📥 Download Settings</div>', unsafe_allow_html=True)
+
+    with st.form("download_form", clear_on_submit=False):
+        youtube_url = st.text_input(
+            "YouTube URL",
+            placeholder="https://www.youtube.com/watch?v=...",
+            label_visibility="collapsed",
+        )
+
         col1, col2 = st.columns(2)
         with col1:
-            download_type = st.selectbox("📥 Download Type:", ["video", "audio"])
+            download_type = st.selectbox(
+                "Type",
+                ["video", "audio"],
+                format_func=lambda x: "🎬 Video" if x == "video" else "🎵 Audio (MP3)",
+            )
         with col2:
             if download_type == "video":
-                quality_options = [None, 240, 360, 480, 720, 1080]
+                quality_options = [None, 1080, 720, 480, 360, 240]
                 quality = st.selectbox(
-                    "🎬 Video Quality:", 
+                    "Quality",
                     quality_options,
-                    format_func=lambda x: "Best" if x is None else f"{x}p"
+                    format_func=lambda x: "✨ Best available" if x is None else f"{x}p",
                 )
             else:
                 quality = None
-        
-        submit_button = st.form_submit_button("⬇️ Download")
-    
-    if submit_button:
-        if not youtube_url:
-            st.error("⚠️ Please enter a YouTube URL")
+                st.selectbox("Quality", ["192 kbps"], disabled=True, label_visibility="visible")
+
+        # Download folder (local mode only)
+        download_folder = None
+        if not IS_CLOUD_DEPLOYMENT:
+            st.markdown("---")
+            st.markdown("**📁 Save Location** *(optional)*")
+            download_folder_input = st.text_input(
+                "Folder path",
+                placeholder="Leave blank for default temp location",
+                label_visibility="collapsed",
+            )
+            if download_folder_input.strip():
+                p = os.path.expanduser(download_folder_input.strip())
+                if os.path.isdir(p) and os.access(p, os.W_OK):
+                    download_folder = p
+                    st.caption(f"✅ Will save to: `{os.path.abspath(p)}`")
+                else:
+                    st.caption("⚠️ Path not found or not writable — using temp location")
+
+        submitted = st.form_submit_button("⬇️  Download", use_container_width=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Handle submission ─────────────────────────────────────
+    if submitted:
+        if not youtube_url.strip():
+            st.warning("⚠️ Please enter a YouTube URL.")
+        elif "youtube.com" not in youtube_url and "youtu.be" not in youtube_url:
+            st.warning("⚠️ URL does not look like a YouTube link. Please check and try again.")
         else:
-            with st.spinner("Processing download..."):
+            with st.spinner("Fetching video info…"):
                 success = download_content(
-                    youtube_url,
-                    "temp_downloads",
-                    download_type,
-                    quality,
-                    download_folder
+                    url=youtube_url.strip(),
+                    download_type=download_type,
+                    quality=quality,
+                    download_folder=download_folder,
                 )
-            
             if success:
-                st.button("🔄 Download Another", on_click=st.rerun)
+                st.button("🔄 Download Another", on_click=st.rerun, use_container_width=True)
+
+    # ── Footer ───────────────────────────────────────────────
+    st.markdown("""
+<div class="footer">
+    Built with ❤️ using <strong>Streamlit</strong> &amp; <strong>yt-dlp</strong> &nbsp;·&nbsp;
+    For personal use only &nbsp;·&nbsp; Respect copyright laws
+</div>
+""", unsafe_allow_html=True)
+
 
 if __name__ == "__main__":
     main()
