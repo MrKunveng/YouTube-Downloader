@@ -308,7 +308,46 @@ def select_best_format_with_audio(formats, quality=None):
     return combined[0]
 
 
-def download_content(url: str, download_type: str = 'video', quality: int = None, download_folder: str = None):
+def get_available_browsers():
+    """Return list of browsers whose cookies yt-dlp can read on this machine."""
+    import subprocess
+    candidates = {
+        'chrome':  ['Google Chrome', 'chrome'],
+        'firefox': ['Firefox', 'firefox'],
+        'safari':  ['Safari'],
+        'edge':    ['Microsoft Edge', 'edge'],
+        'brave':   ['Brave Browser', 'brave'],
+        'chromium':['Chromium', 'chromium'],
+    }
+    found = []
+    system = platform.system()
+    for browser, names in candidates.items():
+        if system == 'Darwin':
+            for name in names:
+                app = Path(f'/Applications/{name}.app')
+                if app.exists():
+                    found.append(browser)
+                    break
+        elif system == 'Linux':
+            for name in names:
+                try:
+                    subprocess.run(['which', name.lower()], capture_output=True, check=True)
+                    found.append(browser)
+                    break
+                except subprocess.CalledProcessError:
+                    pass
+        elif system == 'Windows':
+            import shutil
+            for name in names:
+                if shutil.which(name.lower()):
+                    found.append(browser)
+                    break
+    return found
+
+
+def download_content(url: str, download_type: str = 'video', quality: int = None,
+                     download_folder: str = None, cookies_file: str = None,
+                     browser_cookies: str = None):
     """Download video or audio. Returns True on success."""
     ffmpeg_path = check_ffmpeg()
     if not ffmpeg_path:
@@ -345,15 +384,15 @@ def download_content(url: str, download_type: str = 'video', quality: int = None
             'ignoreerrors': False,
             'nooverwrites': False,
             'skip_unavailable_fragments': True,
-            'extractor_retries': 5,
-            'fragment_retries': 5,
-            'retries': 5,
+            'extractor_retries': 3,
+            'fragment_retries': 3,
+            'retries': 3,
             'socket_timeout': 30,
             'extract_flat': False,
+            # tv_embedded bypasses "sign in to confirm" bot check best
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['ios', 'android', 'web'],
-                    'player_skip': ['webpage', 'configs'],
+                    'player_client': ['tv_embedded', 'ios', 'web'],
                 }
             },
             'http_headers': {
@@ -364,6 +403,14 @@ def download_content(url: str, download_type: str = 'video', quality: int = None
                 )
             },
         }
+
+        # ── Cookie options (strongest bot-detection bypass) ──
+        if cookies_file and os.path.exists(cookies_file):
+            ydl_opts['cookiefile'] = cookies_file
+            logger.info(f"Using cookies file: {cookies_file}")
+        elif browser_cookies:
+            ydl_opts['cookiesfrombrowser'] = (browser_cookies,)
+            logger.info(f"Using cookies from browser: {browser_cookies}")
 
         if ffmpeg_path != 'ffmpeg':
             ydl_opts['ffmpeg_location'] = ffmpeg_path
@@ -441,13 +488,43 @@ def download_content(url: str, download_type: str = 'video', quality: int = None
         try:
             # ── Extract info first ──────────────────────────
             info_opts = {**ydl_opts, 'quiet': True, 'no_warnings': True}
-            with yt_dlp.YoutubeDL(info_opts) as info_ydl:
+            info = None
+            info_clients = [
+                ['tv_embedded', 'ios', 'web'],
+                ['tv_embedded'],
+                ['mweb'],
+                ['ios'],
+                ['web'],
+            ]
+            for clients in info_clients:
                 try:
-                    info = info_ydl.extract_info(url, download=False)
+                    test_opts = {
+                        **info_opts,
+                        'extractor_args': {'youtube': {'player_client': clients}},
+                    }
+                    with yt_dlp.YoutubeDL(test_opts) as info_ydl:
+                        info = info_ydl.extract_info(url, download=False)
+                    break
                 except Exception as e:
-                    st.error(f"❌ Could not fetch video info: {e}")
-                    logger.error(f"Info extraction: {e}")
-                    return False
+                    logger.warning(f"Info extract with {clients} failed: {e}")
+                    if clients == info_clients[-1]:
+                        err = str(e)
+                        if 'Sign in' in err or 'bot' in err.lower():
+                            st.error("🤖 YouTube is blocking this as a bot.")
+                            st.warning(
+                                "**Fix:** Expand **Advanced Settings** below, upload a "
+                                "`cookies.txt` file exported from your browser, or pick "
+                                "your browser to pass cookies automatically.\n\n"
+                                "See [how to export cookies](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp)."
+                            )
+                        else:
+                            st.error(f"❌ Could not fetch video info: {e}")
+                        logger.error(f"Info extraction: {e}")
+                        return False
+
+            if info is None:
+                st.error("❌ Failed to fetch video information.")
+                return False
 
             title = info.get('title', 'Unknown')
             duration = info.get('duration', 0)
@@ -474,21 +551,34 @@ def download_content(url: str, download_type: str = 'video', quality: int = None
             download_success = False
             st.markdown("**Downloading…**")
 
+            q = f'[height<={quality}]' if quality else ''
             fallback_opts_list = [
                 {
-                    'name': 'Primary (iOS + Android + Web)',
-                    'overrides': {}
+                    'name': 'tv_embedded + ios + web',
+                    'overrides': {}   # uses base ydl_opts (tv_embedded first)
                 },
                 {
-                    'name': 'Fallback — iOS only',
+                    'name': 'tv_embedded only',
+                    'overrides': {
+                        'extractor_args': {'youtube': {'player_client': ['tv_embedded']}},
+                    }
+                },
+                {
+                    'name': 'mweb client',
+                    'overrides': {
+                        'extractor_args': {'youtube': {'player_client': ['mweb']}},
+                    }
+                },
+                {
+                    'name': 'ios client',
                     'overrides': {
                         'extractor_args': {'youtube': {'player_client': ['ios']}},
-                        'format': f'bestvideo[height<={quality}]+bestaudio/best' if quality else 'bestvideo+bestaudio/best',
+                        'format': f'bestvideo{q}+bestaudio/best' if q else 'bestvideo+bestaudio/best',
                         'merge_output_format': 'mp4',
                     }
                 },
                 {
-                    'name': 'Fallback — any format',
+                    'name': 'any available format',
                     'overrides': {
                         'format': 'bestvideo+bestaudio/best/worst',
                         'merge_output_format': 'mp4',
@@ -497,6 +587,7 @@ def download_content(url: str, download_type: str = 'video', quality: int = None
                 },
             ]
 
+            last_error = ''
             for attempt in fallback_opts_list:
                 try:
                     opts = {**ydl_opts, **attempt['overrides']}
@@ -505,12 +596,21 @@ def download_content(url: str, download_type: str = 'video', quality: int = None
                     download_success = True
                     break
                 except Exception as e:
+                    last_error = str(e)
                     logger.warning(f"Attempt '{attempt['name']}' failed: {e}")
                     if attempt is fallback_opts_list[-1]:
-                        st.error(f"❌ All download attempts failed.\n\n`{e}`")
-                        st.info("💡 Try updating yt-dlp: `pip install --upgrade yt-dlp`")
+                        st.error(f"❌ All download attempts failed.")
+                        if 'Sign in' in last_error or 'bot' in last_error.lower():
+                            st.warning(
+                                "🤖 YouTube is blocking this request as a bot.\n\n"
+                                "**Fix:** Use the **Cookies** option in Advanced Settings above — "
+                                "export your browser cookies and upload `cookies.txt`, "
+                                "or select your browser to read cookies automatically."
+                            )
+                        else:
+                            st.info(f"Last error: `{last_error}`")
+                            st.info("💡 Try: `pip install --upgrade yt-dlp`")
                         return False
-                    st.warning(f"⚠️ {attempt['name']} failed, retrying…")
 
             # ── Locate downloaded file ──────────────────────
             if not downloaded_file:
@@ -639,23 +739,67 @@ This tool lets you download YouTube videos and audio directly from your browser.
                 quality = None
                 st.selectbox("Quality", ["192 kbps"], disabled=True, label_visibility="visible")
 
-        # Download folder (local mode only)
+        # ── Cookies (cloud: always visible; local: in expander) ──
+        st.markdown("---")
+        cookies_file_upload = None
+        browser_cookies = None
         download_folder = None
-        if not IS_CLOUD_DEPLOYMENT:
-            st.markdown("---")
-            st.markdown("**📁 Save Location** *(optional)*")
-            download_folder_input = st.text_input(
-                "Folder path",
-                placeholder="Leave blank for default temp location",
+
+        if IS_CLOUD_DEPLOYMENT:
+            # On cloud, cookies upload is the ONLY bypass — show it prominently
+            st.markdown(
+                "**🍪 YouTube Cookies** &nbsp; "
+                "<span style='background:#ff4444;color:#fff;border-radius:4px;"
+                "padding:2px 7px;font-size:0.75rem;font-weight:700'>REQUIRED if blocked</span>",
+                unsafe_allow_html=True,
+            )
+            st.caption(
+                "If you see a 'Sign in to confirm you're not a bot' error, "
+                "export your YouTube cookies from your browser and upload the file below. "
+                "Use the [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) "
+                "Chrome extension or equivalent."
+            )
+            cookies_file_upload = st.file_uploader(
+                "Upload cookies.txt (Netscape format)",
+                type=["txt"],
                 label_visibility="collapsed",
             )
-            if download_folder_input.strip():
-                p = os.path.expanduser(download_folder_input.strip())
-                if os.path.isdir(p) and os.access(p, os.W_OK):
-                    download_folder = p
-                    st.caption(f"✅ Will save to: `{os.path.abspath(p)}`")
+        else:
+            with st.expander("⚙️ Advanced Settings  *(fix bot errors / choose save folder)*"):
+                st.markdown("**🍪 Cookies** *(needed if YouTube blocks the download)*")
+                cookies_file_upload = st.file_uploader(
+                    "Upload cookies.txt",
+                    type=["txt"],
+                    help="Export from your browser with a cookie exporter extension.",
+                    label_visibility="collapsed",
+                )
+
+                available_browsers = get_available_browsers()
+                if available_browsers:
+                    browser_options = ["— don't use browser cookies —"] + available_browsers
+                    browser_choice = st.selectbox(
+                        "Or auto-read cookies from browser",
+                        browser_options,
+                        help="yt-dlp will read your browser's YouTube login cookies directly.",
+                    )
+                    if browser_choice != "— don't use browser cookies —":
+                        browser_cookies = browser_choice
                 else:
-                    st.caption("⚠️ Path not found or not writable — using temp location")
+                    st.caption("No supported browsers detected on this machine.")
+
+                st.markdown("**📁 Save Location**")
+                download_folder_input = st.text_input(
+                    "Folder path",
+                    placeholder="Leave blank for temp location",
+                    label_visibility="collapsed",
+                )
+                if download_folder_input.strip():
+                    p = os.path.expanduser(download_folder_input.strip())
+                    if os.path.isdir(p) and os.access(p, os.W_OK):
+                        download_folder = p
+                        st.caption(f"✅ Will save to: `{os.path.abspath(p)}`")
+                    else:
+                        st.caption("⚠️ Path not found or not writable — using temp location")
 
         submitted = st.form_submit_button("⬇️  Download", use_container_width=True)
 
@@ -668,12 +812,21 @@ This tool lets you download YouTube videos and audio directly from your browser.
         elif "youtube.com" not in youtube_url and "youtu.be" not in youtube_url:
             st.warning("⚠️ URL does not look like a YouTube link. Please check and try again.")
         else:
+            # Save uploaded cookies file to a temp path if provided
+            cookies_file_path = None
+            if cookies_file_upload is not None:
+                cookies_tmp = Path("/tmp/yt_cookies.txt") if IS_CLOUD_DEPLOYMENT else Path("temp_cookies.txt")
+                cookies_tmp.write_bytes(cookies_file_upload.read())
+                cookies_file_path = str(cookies_tmp)
+
             with st.spinner("Fetching video info…"):
                 success = download_content(
                     url=youtube_url.strip(),
                     download_type=download_type,
                     quality=quality,
-                    download_folder=download_folder,
+                    download_folder=download_folder if not IS_CLOUD_DEPLOYMENT else None,
+                    cookies_file=cookies_file_path,
+                    browser_cookies=browser_cookies if not IS_CLOUD_DEPLOYMENT else None,
                 )
             if success:
                 st.button("🔄 Download Another", on_click=st.rerun, use_container_width=True)
