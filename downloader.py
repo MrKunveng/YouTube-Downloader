@@ -394,34 +394,37 @@ def download_content(url: str, download_type: str = 'video', quality: int = None
         }
 
         # ── Cookie options (strongest bot-detection bypass) ──
-        # Priority: uploaded file → Streamlit secret → local file → browser cookies
-        auto_cookies = Path("cookies.txt")
+        # Priority: uploaded file → Streamlit secret (base64) → local file → browser
         resolved_cookies_file = None
 
         if cookies_file and os.path.exists(cookies_file):
             resolved_cookies_file = cookies_file
             logger.info("Using uploaded cookies file")
         else:
-            # Try loading from Streamlit secrets (cloud deployment)
+            # Try Streamlit secrets (base64-encoded)
             try:
-                secret_cookies = st.secrets.get("youtube", {}).get("cookies", "")
-                if secret_cookies and secret_cookies.strip():
+                import base64
+                encoded = st.secrets["YOUTUBE_COOKIES"]
+                if encoded and encoded.strip():
                     secret_path = Path("/tmp/yt_secret_cookies.txt")
-                    secret_path.write_text(secret_cookies.strip())
+                    secret_path.write_bytes(base64.b64decode(encoded.strip()))
                     resolved_cookies_file = str(secret_path)
-                    logger.info("Using cookies from Streamlit secrets")
+                    logger.info("Using cookies from Streamlit secrets (base64)")
             except Exception:
-                pass  # st.secrets not available or key missing
+                pass
 
-            if not resolved_cookies_file and auto_cookies.exists():
-                resolved_cookies_file = str(auto_cookies.resolve())
-                logger.info("Auto-loaded cookies.txt from project folder")
+            # Fallback: local cookies.txt
+            if not resolved_cookies_file:
+                auto_cookies = Path("cookies.txt")
+                if auto_cookies.exists():
+                    resolved_cookies_file = str(auto_cookies.resolve())
+                    logger.info("Auto-loaded local cookies.txt")
 
         if resolved_cookies_file:
             ydl_opts['cookiefile'] = resolved_cookies_file
         elif browser_cookies:
             ydl_opts['cookiesfrombrowser'] = (browser_cookies,)
-            logger.info(f"Using cookies from browser: {browser_cookies}")
+            logger.info(f"Using browser cookies: {browser_cookies}")
 
         if ffmpeg_path != 'ffmpeg':
             ydl_opts['ffmpeg_location'] = ffmpeg_path
@@ -663,10 +666,8 @@ This tool lets you download YouTube videos and audio directly from your browser.
 """)
         st.markdown("---")
         ffmpeg_ok = check_ffmpeg() is not None
-        # Check cookie sources
         try:
-            secret_cookies = st.secrets.get("youtube", {}).get("cookies", "")
-            has_secret = bool(secret_cookies and secret_cookies.strip())
+            has_secret = bool(st.secrets.get("YOUTUBE_COOKIES", "").strip())
         except Exception:
             has_secret = False
         has_local = Path("cookies.txt").exists()
@@ -678,6 +679,7 @@ This tool lets you download YouTube videos and audio directly from your browser.
             cookies_status = "⚠️ Not configured"
         st.markdown(f"**FFmpeg:** {'✅ Available' if ffmpeg_ok else '❌ Not found'}")
         st.markdown(f"**Cookies:** {cookies_status}")
+        st.markdown(f"**yt-dlp:** {yt_dlp.version.__version__}")
         st.markdown(f"**Deployment:** {'Cloud ☁️' if IS_CLOUD_DEPLOYMENT else 'Local 💻'}")
 
     # ── Download form ─────────────────────────────────────────
