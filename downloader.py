@@ -405,14 +405,31 @@ def download_content(url: str, download_type: str = 'video', quality: int = None
         }
 
         # ── Cookie options (strongest bot-detection bypass) ──
-        # Priority: uploaded file → auto-detected local file → browser cookies
+        # Priority: uploaded file → Streamlit secret → local file → browser cookies
         auto_cookies = Path("cookies.txt")
+        resolved_cookies_file = None
+
         if cookies_file and os.path.exists(cookies_file):
-            ydl_opts['cookiefile'] = cookies_file
-            logger.info(f"Using uploaded cookies file: {cookies_file}")
-        elif auto_cookies.exists():
-            ydl_opts['cookiefile'] = str(auto_cookies.resolve())
-            logger.info(f"Auto-loaded cookies.txt from project folder")
+            resolved_cookies_file = cookies_file
+            logger.info("Using uploaded cookies file")
+        else:
+            # Try loading from Streamlit secrets (cloud deployment)
+            try:
+                secret_cookies = st.secrets.get("youtube", {}).get("cookies", "")
+                if secret_cookies and secret_cookies.strip():
+                    secret_path = Path("/tmp/yt_secret_cookies.txt")
+                    secret_path.write_text(secret_cookies.strip())
+                    resolved_cookies_file = str(secret_path)
+                    logger.info("Using cookies from Streamlit secrets")
+            except Exception:
+                pass  # st.secrets not available or key missing
+
+            if not resolved_cookies_file and auto_cookies.exists():
+                resolved_cookies_file = str(auto_cookies.resolve())
+                logger.info("Auto-loaded cookies.txt from project folder")
+
+        if resolved_cookies_file:
+            ydl_opts['cookiefile'] = resolved_cookies_file
         elif browser_cookies:
             ydl_opts['cookiesfrombrowser'] = (browser_cookies,)
             logger.info(f"Using cookies from browser: {browser_cookies}")
@@ -706,9 +723,21 @@ This tool lets you download YouTube videos and audio directly from your browser.
 """)
         st.markdown("---")
         ffmpeg_ok = check_ffmpeg() is not None
-        cookies_ok = Path("cookies.txt").exists()
+        # Check cookie sources
+        try:
+            secret_cookies = st.secrets.get("youtube", {}).get("cookies", "")
+            has_secret = bool(secret_cookies and secret_cookies.strip())
+        except Exception:
+            has_secret = False
+        has_local = Path("cookies.txt").exists()
+        if has_secret:
+            cookies_status = "✅ Via Streamlit secret"
+        elif has_local:
+            cookies_status = "✅ cookies.txt loaded"
+        else:
+            cookies_status = "⚠️ Not configured"
         st.markdown(f"**FFmpeg:** {'✅ Available' if ffmpeg_ok else '❌ Not found'}")
-        st.markdown(f"**Cookies:** {'✅ cookies.txt loaded' if cookies_ok else '⚠️ Not found'}")
+        st.markdown(f"**Cookies:** {cookies_status}")
         st.markdown(f"**Deployment:** {'Cloud ☁️' if IS_CLOUD_DEPLOYMENT else 'Local 💻'}")
 
     # ── Download form ─────────────────────────────────────────

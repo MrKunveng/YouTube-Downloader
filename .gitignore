@@ -2,6 +2,9 @@
 cookies.txt
 *.cookies.txt
 
+# Streamlit secrets — never commit
+.streamlit/secrets.toml
+
 # Temp download dirs
 temp_downloads/
 temp_cookies.txt
