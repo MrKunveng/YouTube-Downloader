@@ -405,9 +405,14 @@ def download_content(url: str, download_type: str = 'video', quality: int = None
         }
 
         # ── Cookie options (strongest bot-detection bypass) ──
+        # Priority: uploaded file → auto-detected local file → browser cookies
+        auto_cookies = Path("cookies.txt")
         if cookies_file and os.path.exists(cookies_file):
             ydl_opts['cookiefile'] = cookies_file
-            logger.info(f"Using cookies file: {cookies_file}")
+            logger.info(f"Using uploaded cookies file: {cookies_file}")
+        elif auto_cookies.exists():
+            ydl_opts['cookiefile'] = str(auto_cookies.resolve())
+            logger.info(f"Auto-loaded cookies.txt from project folder")
         elif browser_cookies:
             ydl_opts['cookiesfrombrowser'] = (browser_cookies,)
             logger.info(f"Using cookies from browser: {browser_cookies}")
@@ -701,12 +706,10 @@ This tool lets you download YouTube videos and audio directly from your browser.
 """)
         st.markdown("---")
         ffmpeg_ok = check_ffmpeg() is not None
-        st.markdown(
-            f"**FFmpeg:** {'✅ Available' if ffmpeg_ok else '❌ Not found'}"
-        )
-        st.markdown(
-            f"**Deployment:** {'Cloud ☁️' if IS_CLOUD_DEPLOYMENT else 'Local 💻'}"
-        )
+        cookies_ok = Path("cookies.txt").exists()
+        st.markdown(f"**FFmpeg:** {'✅ Available' if ffmpeg_ok else '❌ Not found'}")
+        st.markdown(f"**Cookies:** {'✅ cookies.txt loaded' if cookies_ok else '⚠️ Not found'}")
+        st.markdown(f"**Deployment:** {'Cloud ☁️' if IS_CLOUD_DEPLOYMENT else 'Local 💻'}")
 
     # ── Download form ─────────────────────────────────────────
     st.markdown('<div class="section-card">', unsafe_allow_html=True)

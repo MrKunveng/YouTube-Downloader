@@ -1,0 +1,15 @@
+# Cookies — never commit, contains session tokens
+cookies.txt
+*.cookies.txt
+
+# Temp download dirs
+temp_downloads/
+temp_cookies.txt
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
