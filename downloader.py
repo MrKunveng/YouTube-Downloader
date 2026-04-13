@@ -389,19 +389,8 @@ def download_content(url: str, download_type: str = 'video', quality: int = None
             'retries': 3,
             'socket_timeout': 30,
             'extract_flat': False,
-            # tv_embedded bypasses "sign in to confirm" bot check best
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['tv_embedded', 'ios', 'web'],
-                }
-            },
-            'http_headers': {
-                'User-Agent': (
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                    'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/120.0.0.0 Safari/537.36'
-                )
-            },
+            # Let yt-dlp choose the best available client automatically
+            # (older hardcoded clients like tv_embedded are removed in yt-dlp 2026+)
         }
 
         # ── Cookie options (strongest bot-detection bypass) ──
@@ -511,38 +500,23 @@ def download_content(url: str, download_type: str = 'video', quality: int = None
             # ── Extract info first ──────────────────────────
             info_opts = {**ydl_opts, 'quiet': True, 'no_warnings': True}
             info = None
-            info_clients = [
-                ['tv_embedded', 'ios', 'web'],
-                ['tv_embedded'],
-                ['mweb'],
-                ['ios'],
-                ['web'],
-            ]
-            for clients in info_clients:
-                try:
-                    test_opts = {
-                        **info_opts,
-                        'extractor_args': {'youtube': {'player_client': clients}},
-                    }
-                    with yt_dlp.YoutubeDL(test_opts) as info_ydl:
-                        info = info_ydl.extract_info(url, download=False)
-                    break
-                except Exception as e:
-                    logger.warning(f"Info extract with {clients} failed: {e}")
-                    if clients == info_clients[-1]:
-                        err = str(e)
-                        if 'Sign in' in err or 'bot' in err.lower():
-                            st.error("🤖 YouTube is blocking this as a bot.")
-                            st.warning(
-                                "**Fix:** Expand **Advanced Settings** below, upload a "
-                                "`cookies.txt` file exported from your browser, or pick "
-                                "your browser to pass cookies automatically.\n\n"
-                                "See [how to export cookies](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp)."
-                            )
-                        else:
-                            st.error(f"❌ Could not fetch video info: {e}")
-                        logger.error(f"Info extraction: {e}")
-                        return False
+            try:
+                with yt_dlp.YoutubeDL(info_opts) as info_ydl:
+                    info = info_ydl.extract_info(url, download=False)
+            except Exception as e:
+                err = str(e)
+                logger.error(f"Info extraction failed: {e}")
+                if 'Sign in' in err or 'bot' in err.lower() or 'cookies' in err.lower():
+                    st.error("🤖 YouTube is blocking this request.")
+                    st.warning(
+                        "**Fix:** Upload your `cookies.txt` in the **🍪 Cookies** section above.\n\n"
+                        "Export it from Chrome using the "
+                        "[Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) "
+                        "extension while logged into YouTube."
+                    )
+                else:
+                    st.error(f"❌ Could not fetch video info: {e}")
+                return False
 
             if info is None:
                 st.error("❌ Failed to fetch video information.")
@@ -573,64 +547,30 @@ def download_content(url: str, download_type: str = 'video', quality: int = None
             download_success = False
             st.markdown("**Downloading…**")
 
-            q = f'[height<={quality}]' if quality else ''
-            fallback_clients = [
-                ['tv_embedded', 'ios', 'web'],
-                ['tv_embedded'],
-                ['android_embedded'],
-                ['android_music'],
-                ['mweb'],
-                ['ios'],
-            ]
-
             download_success = False
-            errors = {}
-
-            for clients in fallback_clients:
-                client_name = '+'.join(clients)
-                try:
-                    opts = {
-                        **ydl_opts,
-                        'extractor_args': {'youtube': {'player_client': clients}},
-                    }
-                    with yt_dlp.YoutubeDL(opts) as ydl:
-                        ydl.download([url])
-                    download_success = True
-                    logger.info(f"Download succeeded with clients: {clients}")
-                    break
-                except Exception as e:
-                    errors[client_name] = str(e)
-                    logger.warning(f"Download with {client_name} failed: {e}")
+            download_error = ''
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+                download_success = True
+            except Exception as e:
+                download_error = str(e)
+                logger.error(f"Download failed: {e}")
 
             if not download_success:
-                # Collect all unique error messages
-                unique_errors = list(dict.fromkeys(errors.values()))
-                last_error = unique_errors[-1] if unique_errors else ''
-                is_bot_error = any(
-                    kw in err for err in unique_errors
-                    for kw in ('Sign in', 'bot', 'cookies', 'confirm your age', 'This video is unavailable')
-                )
-
-                st.error("❌ Download failed — YouTube blocked all attempts.")
-                with st.expander("🔍 Show error details"):
-                    for name, err in errors.items():
-                        st.code(f"[{name}]  {err}", language=None)
-
+                is_bot_error = any(kw in download_error for kw in (
+                    'Sign in', 'bot', 'cookies', 'confirm your age',
+                ))
+                st.error("❌ Download failed.")
+                with st.expander("🔍 Error details"):
+                    st.code(download_error, language=None)
                 if is_bot_error:
                     st.warning(
-                        "### 🤖 YouTube is detecting this as a bot request\n\n"
-                        "This is very common on cloud/server deployments. "
-                        "The fix is to provide your browser cookies:\n\n"
-                        "**Step 1** — Install the "
-                        "[Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) "
-                        "Chrome extension\n\n"
-                        "**Step 2** — Go to [youtube.com](https://youtube.com) and make sure you're logged in\n\n"
-                        "**Step 3** — Click the extension icon → **Export** → save as `cookies.txt`\n\n"
-                        "**Step 4** — Upload that file using the **🍪 Cookies** upload above and try again"
+                        "🤖 YouTube is blocking this request.\n\n"
+                        "**Fix:** Upload your `cookies.txt` in the **🍪 Cookies** section above."
                     )
                 else:
-                    st.info(f"Last error: `{last_error}`")
-                    st.caption("💡 Possible fixes: check the URL is public, or update yt-dlp.")
+                    st.caption("💡 Check the URL is public, or try a different video.")
                 return False
 
             # ── Locate downloaded file ──────────────────────
