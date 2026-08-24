@@ -1,4 +1,6 @@
 import os
+import time
+from html import escape
 import streamlit as st
 from pathlib import Path
 import platform
@@ -30,210 +32,243 @@ LOCAL_TEMP_DIR = Path("temp_downloads")
 # ─────────────────────────────────────────────
 CUSTOM_CSS = """
 <style>
-/* ── Global ── */
-html, body, [class*="css"] {
-    font-family: 'Segoe UI', Roboto, Arial, sans-serif;
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap');
+
+:root {
+    --ink: #0E1116;          /* base — cool graphite, not pure black */
+    --panel: #161A21;        /* raised surface */
+    --panel-2: #1B212A;
+    --line: #262C36;         /* hairline */
+    --text: #E6E9EF;
+    --muted: #8A93A2;
+    --signal: #22C55E;       /* progress · ready · go */
+    --signal-dim: #16A34A;
+    --signal-glow: rgba(34, 197, 94, 0.25);
+    --brand: #FF3B30;        /* YouTube mark and blocked states only */
+    --warn: #F5A524;
+    --sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --display: 'Space Grotesk', 'IBM Plex Sans', sans-serif;
 }
 
-/* ── Page background ── */
-.stApp {
-    background: linear-gradient(135deg, #0f0f0f 0%, #1a1a2e 50%, #0f0f0f 100%);
-    min-height: 100vh;
-}
+/* ── Base ── */
+.stApp { background: var(--ink); }
+html, body, [class*="css"] { font-family: var(--sans); color: var(--text); }
+[data-testid="stMainBlockContainer"] { max-width: 800px; padding-top: 2rem; padding-bottom: 4rem; }
+[data-testid="stHeader"] { background: transparent; }
+[data-testid="stAppDeployButton"] { display: none; }
 
-/* ── Hero banner ── */
-.hero-banner {
-    background: linear-gradient(90deg, #ff0000 0%, #cc0000 50%, #990000 100%);
-    border-radius: 16px;
-    padding: 2.5rem 2rem;
-    margin-bottom: 2rem;
-    text-align: center;
-    box-shadow: 0 8px 32px rgba(255, 0, 0, 0.35);
-    position: relative;
-    overflow: hidden;
+/* ── Header rail ── */
+.rail {
+    display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+    padding: 0.8rem 1rem;
+    border: 1px solid var(--line); border-radius: 12px;
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    margin-bottom: 1rem;
 }
-.hero-banner::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(circle at 30% 50%, rgba(255,255,255,0.08) 0%, transparent 60%);
+.rail-mark {
+    width: 28px; height: 20px; border-radius: 6px;
+    background: var(--brand); position: relative; flex: none;
 }
-.hero-banner h1 {
-    font-size: 2.8rem;
-    font-weight: 800;
-    color: #ffffff;
-    margin: 0;
-    text-shadow: 0 2px 8px rgba(0,0,0,0.4);
-    letter-spacing: -0.5px;
+.rail-mark::after {
+    content: ''; position: absolute; left: 10px; top: 5px;
+    border-left: 8px solid #fff;
+    border-top: 5px solid transparent; border-bottom: 5px solid transparent;
 }
-.hero-banner p {
-    color: rgba(255,255,255,0.85);
-    font-size: 1.05rem;
-    margin-top: 0.5rem;
+.rail-name { font-family: var(--display); font-weight: 700; font-size: 1.05rem; letter-spacing: -0.01em; }
+.rail-chips { margin-left: auto; display: flex; gap: 0.35rem; flex-wrap: wrap; }
+.chip {
+    font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.03em;
+    color: var(--muted); border: 1px solid var(--line);
+    border-radius: 999px; padding: 3px 9px; white-space: nowrap;
 }
+.chip-ok { color: var(--signal); border-color: rgba(34, 197, 94, 0.3); }
+.chip-warn { color: var(--warn); border-color: rgba(245, 165, 36, 0.3); }
+.chip-bad { color: var(--brand); border-color: rgba(255, 59, 48, 0.35); }
 
-/* ── Badge ── */
-.mode-badge {
-    display: inline-block;
-    background: rgba(255,255,255,0.2);
-    border: 1px solid rgba(255,255,255,0.35);
-    border-radius: 20px;
-    padding: 4px 14px;
-    font-size: 0.8rem;
-    color: #fff;
-    font-weight: 600;
-    letter-spacing: 0.5px;
-    margin-top: 0.75rem;
+/* ── Stage cards: bordered containers holding an .eyebrow ── */
+[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .eyebrow) {
+    background: var(--panel);
+    border: 1px solid var(--line) !important;
+    border-radius: 12px;
+    padding: 1.05rem 1.15rem 0.9rem;
 }
+.eyebrow {
+    font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--muted);
+    display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.15rem;
+}
+.eyebrow::after { content: ''; height: 1px; flex: 1; background: var(--line); }
+.eyebrow-note { text-transform: none; letter-spacing: 0.02em; color: #6B7480; }
 
-/* ── Section cards ── */
-.section-card {
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 14px;
-    padding: 1.5rem;
-    margin-bottom: 1.25rem;
-    backdrop-filter: blur(6px);
-    transition: border-color 0.2s;
+/* the form is the card — its inner block must not draw a second box */
+[data-testid="stForm"] {
+    background: var(--panel);
+    border: 1px solid var(--line) !important;
+    border-radius: 12px;
+    padding: 1.05rem 1.15rem 0.9rem;
 }
-.section-card:hover {
-    border-color: rgba(255, 0, 0, 0.4);
-}
-.section-title {
-    font-size: 0.9rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 1.2px;
-    color: #ff4444;
-    margin-bottom: 0.75rem;
+[data-testid="stForm"] [data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .eyebrow) {
+    background: transparent; border: none !important; padding: 0;
 }
 
 /* ── Inputs ── */
-input[type="text"], .stTextInput input {
-    background: rgba(255,255,255,0.06) !important;
-    border: 1.5px solid rgba(255,255,255,0.15) !important;
-    border-radius: 10px !important;
-    color: #fff !important;
-    padding: 0.6rem 1rem !important;
-    transition: border-color 0.2s !important;
+[data-testid="stTextInputRootElement"] {
+    background: #0A0D12 !important;
+    border: 1px solid var(--line) !important;
+    border-radius: 9px !important;
 }
-input[type="text"]:focus, .stTextInput input:focus {
-    border-color: #ff4444 !important;
-    box-shadow: 0 0 0 3px rgba(255, 68, 68, 0.18) !important;
+[data-testid="stTextInputRootElement"]:focus-within {
+    border-color: var(--signal) !important;
+    box-shadow: 0 0 0 3px var(--signal-glow) !important;
+}
+[data-testid="stTextInputField"] { color: var(--text) !important; font-family: var(--mono) !important; font-size: 0.88rem !important; }
+[data-testid="stTextInputField"]::placeholder { color: #5A626F !important; }
+
+[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+    background: #0A0D12 !important;
+    border: 1px solid var(--line) !important;
+    border-radius: 9px !important;
+    color: var(--text) !important;
+    font-size: 0.88rem !important;
+}
+[data-testid="stWidgetLabel"] p {
+    font-family: var(--mono) !important; font-size: 0.7rem !important;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted) !important;
 }
 
-/* ── Select boxes ── */
-.stSelectbox > div > div {
-    background: rgba(255,255,255,0.06) !important;
-    border: 1.5px solid rgba(255,255,255,0.15) !important;
-    border-radius: 10px !important;
-    color: #fff !important;
+/* ── Buttons ── */
+[data-testid="stBaseButton-primaryFormSubmit"],
+[data-testid="stBaseButton-primary"] {
+    background: var(--signal) !important; color: #08130C !important;
+    border: none !important; border-radius: 9px !important;
+    font-family: var(--sans) !important; font-weight: 600 !important;
+    letter-spacing: 0.01em !important; padding: 0.6rem 1.4rem !important;
+    transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+[data-testid="stBaseButton-primaryFormSubmit"]:hover,
+[data-testid="stBaseButton-primary"]:hover {
+    background: #2DD46B !important; box-shadow: 0 0 0 4px var(--signal-glow) !important;
+}
+[data-testid="stBaseButton-secondary"],
+[data-testid="stBaseButton-secondaryFormSubmit"],
+.stDownloadButton button {
+    background: transparent !important; color: var(--text) !important;
+    border: 1px solid var(--line) !important; border-radius: 9px !important;
+    font-weight: 500 !important; transition: border-color 0.15s ease;
+}
+[data-testid="stBaseButton-secondary"]:hover,
+.stDownloadButton button:hover { border-color: var(--signal) !important; color: var(--signal) !important; }
+
+/* ── Level meter (the signature element) ── */
+[data-testid="stProgressBarTrack"] {
+    background: #080A0E !important;
+    border: 1px solid var(--line);
+    border-radius: 5px; height: 12px !important;
+    overflow: hidden; position: relative;
+}
+[data-testid="stProgressBarTrack"] > div {
+    background: linear-gradient(90deg, var(--signal-dim), var(--signal)) !important;
+    box-shadow: 0 0 14px var(--signal-glow);
+    transition: transform 0.25s ease;
+}
+/* fixed segment gaps, so the fill reads as a level meter rather than a bar */
+[data-testid="stProgressBarTrack"]::after {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(90deg, transparent 0 7px, var(--ink) 7px 9px);
+}
+[data-testid="stProgress"] [data-testid="stMarkdownContainer"] p {
+    font-family: var(--mono) !important; font-size: 0.72rem !important;
+    letter-spacing: 0.08em; color: var(--signal) !important; margin-bottom: 0.3rem !important;
 }
 
-/* ── Primary button ── */
-.stButton > button[kind="primary"],
-.stFormSubmitButton > button {
-    background: linear-gradient(135deg, #ff2222, #cc0000) !important;
-    color: #fff !important;
-    border: none !important;
-    border-radius: 10px !important;
-    font-size: 1rem !important;
-    font-weight: 700 !important;
-    padding: 0.65rem 2rem !important;
-    letter-spacing: 0.3px !important;
-    box-shadow: 0 4px 16px rgba(255,0,0,0.35) !important;
-    transition: all 0.2s ease !important;
+/* ── Telemetry + data rows ── */
+.telemetry {
+    font-family: var(--mono); font-size: 0.72rem; color: var(--muted);
+    letter-spacing: 0.02em; padding-top: 0.35rem;
 }
-.stButton > button[kind="primary"]:hover,
-.stFormSubmitButton > button:hover {
-    background: linear-gradient(135deg, #ff4444, #e60000) !important;
-    box-shadow: 0 6px 24px rgba(255,0,0,0.5) !important;
-    transform: translateY(-1px) !important;
+.datarow { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.55rem; }
+.data { font-family: var(--mono); font-size: 0.7rem; color: var(--muted);
+        border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; }
+.path-chip {
+    font-family: var(--mono); font-size: 0.72rem; color: var(--signal);
+    background: rgba(34, 197, 94, 0.07); border: 1px solid rgba(34, 197, 94, 0.22);
+    border-radius: 6px; padding: 4px 9px; display: inline-block;
+    word-break: break-all; margin-top: 0.5rem;
 }
+.title-lg { font-family: var(--display); font-weight: 700; font-size: 1.15rem; line-height: 1.3; margin: 0.15rem 0 0.1rem; }
+.subtle { color: var(--muted); font-size: 0.85rem; }
 
-/* ── Download button ── */
-.stDownloadButton > button {
-    background: linear-gradient(135deg, #1db954, #15803d) !important;
-    color: #fff !important;
-    border: none !important;
-    border-radius: 10px !important;
-    font-size: 1rem !important;
-    font-weight: 700 !important;
-    padding: 0.65rem 1.5rem !important;
-    box-shadow: 0 4px 16px rgba(29,185,84,0.3) !important;
-    transition: all 0.2s ease !important;
-    width: 100% !important;
+/* ── Result card ── */
+.result {
+    border: 1px solid rgba(34, 197, 94, 0.3); border-left: 3px solid var(--signal);
+    border-radius: 10px; background: rgba(34, 197, 94, 0.05);
+    padding: 0.9rem 1rem; margin: 0.4rem 0 0.7rem;
 }
-.stDownloadButton > button:hover {
-    box-shadow: 0 6px 24px rgba(29,185,84,0.5) !important;
-    transform: translateY(-1px) !important;
-}
-
-/* ── Progress bar ── */
-.stProgress > div > div {
-    background: linear-gradient(90deg, #ff2222, #ff6b6b) !important;
-    border-radius: 6px !important;
-}
-.stProgress > div {
-    background: rgba(255,255,255,0.08) !important;
-    border-radius: 6px !important;
-}
-
-/* ── Alert/info boxes ── */
-.stAlert {
-    border-radius: 10px !important;
-    border-left-width: 4px !important;
-}
+.result-name { font-family: var(--display); font-weight: 600; font-size: 1rem; }
 
 /* ── Expander ── */
-.streamlit-expanderHeader {
-    background: rgba(255,255,255,0.04) !important;
-    border-radius: 8px !important;
-    font-weight: 600 !important;
+[data-testid="stExpander"] details {
+    background: transparent; border: 1px solid var(--line) !important; border-radius: 10px !important;
 }
+[data-testid="stExpander"] summary { font-family: var(--mono) !important; font-size: 0.75rem !important;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted) !important; }
 
-/* ── Metric cards ── */
-.metric-card {
-    background: rgba(255,255,255,0.05);
-    border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 12px;
-    padding: 1rem;
-    text-align: center;
-}
-.metric-value {
-    font-size: 1.6rem;
-    font-weight: 800;
-    color: #ff4444;
-}
-.metric-label {
-    font-size: 0.78rem;
-    color: rgba(255,255,255,0.55);
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-}
+/* ── Alerts ── */
+[data-testid="stAlertContainer"] { border-radius: 10px !important; font-size: 0.88rem; }
 
-/* ── Divider ── */
-hr {
-    border-color: rgba(255,255,255,0.08) !important;
-    margin: 1.5rem 0 !important;
-}
+/* ── Images ── */
+[data-testid="stImage"] img { border-radius: 8px; border: 1px solid var(--line); }
 
-/* ── Scrollbar ── */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: #111; }
-::-webkit-scrollbar-thumb { background: #ff3333; border-radius: 3px; }
+/* ── Sidebar ── */
+[data-testid="stSidebar"] { background: var(--panel); border-right: 1px solid var(--line); }
+
+/* ── Focus + motion floor ── */
+:focus-visible { outline: 2px solid var(--signal) !important; outline-offset: 2px !important; }
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; animation: none !important; }
+}
 
 /* ── Footer ── */
 .footer {
-    text-align: center;
-    color: rgba(255,255,255,0.3);
-    font-size: 0.78rem;
-    padding: 2rem 0 1rem;
-    border-top: 1px solid rgba(255,255,255,0.07);
-    margin-top: 3rem;
+    font-family: var(--mono); font-size: 0.68rem; color: #5A626F;
+    letter-spacing: 0.04em; text-align: center;
+    padding-top: 1.6rem; margin-top: 2rem; border-top: 1px solid var(--line);
 }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--ink); }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #37404E; }
 </style>
 """
+
+
+def timecode(seconds):
+    """Duration as m:ss, or h:mm:ss past an hour."""
+    seconds = int(seconds or 0)
+    h, m, sec = seconds // 3600, (seconds % 3600) // 60, seconds % 60
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
+
+def megabytes(n_bytes):
+    return f"{n_bytes / 1048576:.1f} MB"
+
+
+def telemetry(slot, text):
+    """Monospace readout under the meter."""
+    slot.markdown(f'<div class="telemetry">{escape(text)}</div>', unsafe_allow_html=True)
+
+
+def eyebrow_html(label, note=""):
+    suffix = f'<span class="eyebrow-note">{escape(note)}</span>' if note else ""
+    return f'<div class="eyebrow">{escape(label)}{suffix}</div>'
+
+
+def eyebrow(label, note=""):
+    """Section label. Its presence also styles the container as a stage card."""
+    st.markdown(eyebrow_html(label, note), unsafe_allow_html=True)
 
 
 def check_ffmpeg():
@@ -368,8 +403,8 @@ def download_content(url: str, download_type: str = 'video', quality: int = None
 
         temp_dir.mkdir(parents=True, exist_ok=True)
 
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+        progress_bar = None
+        status_text = None
         downloaded_file = None
 
         output_template = str(temp_dir / '%(title)s.%(ext)s')
@@ -472,48 +507,94 @@ def download_content(url: str, download_type: str = 'video', quality: int = None
             except Exception as e:
                 logger.warning(f"Cleanup warning: {e}")
 
+        def stream_label(d):
+            """Name the stream being fetched — a merged download pulls two."""
+            info = d.get('info_dict') or {}
+            vcodec, acodec = info.get('vcodec'), info.get('acodec')
+            has_v = bool(vcodec) and vcodec != 'none'
+            has_a = bool(acodec) and acodec != 'none'
+            if has_v and not has_a:
+                return '🎬 Video stream'
+            if has_a and not has_v:
+                return '🎵 Audio stream'
+            return os.path.basename(d.get('filename', '')) or 'Media'
+
         def progress_hook(d):
             nonlocal downloaded_file
+            if progress_bar is None:
+                return
             if d['status'] == 'downloading':
                 try:
                     total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
                     done = d.get('downloaded_bytes', 0)
+                    frag_i, frag_n = d.get('fragment_index'), d.get('fragment_count')
                     if total:
                         pct = min(done / total, 1.0)
-                        progress_bar.progress(pct)
-                    fname = os.path.basename(d.get('filename', ''))
+                    elif frag_i and frag_n:
+                        # Fragmented stream (DASH/HLS): no byte total, so count fragments
+                        pct = min(frag_i / frag_n, 1.0)
+                    else:
+                        pct = 0.0
+
+                    progress_bar.progress(pct, text=f"{stream_label(d)}  {pct * 100:.0f}%")
+
+                    parts = []
+                    if total:
+                        parts.append(f"{done / 1048576:.1f} / {total / 1048576:.1f} MB")
+                    elif frag_n:
+                        parts.append(f"fragment {frag_i} of {frag_n}")
                     speed = d.get('_speed_str', '')
                     eta = d.get('_eta_str', '')
-                    parts = [f"⏳ {fname}"]
                     if speed:
-                        parts.append(f"🚀 {speed}")
+                        parts.append(str(speed).strip())
                     if eta:
-                        parts.append(f"⏱ ETA {eta}")
-                    status_text.text("  |  ".join(parts))
+                        parts.append(f"ETA {str(eta).strip()}")
+                    telemetry(status_text, "   ·   ".join(parts))
                 except Exception as e:
                     logger.warning(f"Progress hook error: {e}")
             elif d['status'] == 'finished':
                 downloaded_file = d.get('filename', '')
-                status_text.text(f"⚙️  Processing: {os.path.basename(downloaded_file)}")
-                progress_bar.progress(1.0)
+                progress_bar.progress(1.0, text=f"{stream_label(d)}  100%")
+                telemetry(status_text, "stream complete")
+
+        final_file = None
+
+        def postprocessor_hook(d):
+            # Fires after merge / mp3 extraction, so this is the path that survives.
+            nonlocal final_file
+            pp = d.get('postprocessor') or ''
+            if d.get('status') == 'started' and status_text is not None:
+                if 'Merger' in pp:
+                    telemetry(status_text, "merging video + audio")
+                elif 'ExtractAudio' in pp:
+                    telemetry(status_text, "converting to MP3")
+                else:
+                    telemetry(status_text, (pp or 'processing').lower())
+            if d.get('status') == 'finished':
+                path = (d.get('info_dict') or {}).get('filepath')
+                if path:
+                    final_file = path
 
         ydl_opts['progress_hooks'] = [progress_hook]
+        ydl_opts['postprocessor_hooks'] = [postprocessor_hook]
 
         try:
             # ── Extract info first ──────────────────────────
             info_opts = {**ydl_opts, 'quiet': True, 'no_warnings': True}
             info = None
             try:
-                with yt_dlp.YoutubeDL(info_opts) as info_ydl:
-                    info = info_ydl.extract_info(url, download=False)
+                with st.spinner("Reading video details…"):
+                    with yt_dlp.YoutubeDL(info_opts) as info_ydl:
+                        info = info_ydl.extract_info(url, download=False)
             except Exception as e:
                 err = str(e)
                 logger.error(f"Info extraction failed: {e}")
                 if 'Sign in' in err or 'bot' in err.lower() or 'cookies' in err.lower():
                     st.error("🤖 YouTube is blocking this request.")
                     st.warning(
-                        "**Fix:** Upload your `cookies.txt` in the **🍪 Cookies** section above.\n\n"
-                        "Export it from Chrome using the "
+                        "**Fix:** put a `cookies.txt` file next to the app, or pick your "
+                        "browser under **⚙️ Advanced → Read cookies from browser**.\n\n"
+                        "Export cookies with the "
                         "[Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) "
                         "extension while logged into YouTube."
                     )
@@ -531,30 +612,46 @@ def download_content(url: str, download_type: str = 'video', quality: int = None
             thumbnail = info.get('thumbnail')
 
             # ── Video preview card ──────────────────────────
-            with st.container():
-                st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            if download_type == 'audio':
+                target = 'MP3 · 192 kbps'
+            else:
+                target = f'MP4 · {quality}p' if quality else 'MP4 · best available'
+
+            job = st.container(border=True)
+            with job:
+                stage_slot = st.empty()
+            stage_slot.markdown(eyebrow_html("Downloading"), unsafe_allow_html=True)
+            with job:
                 col_thumb, col_info = st.columns([1, 2])
                 with col_thumb:
                     if thumbnail:
-                        st.image(thumbnail, use_container_width=True)
+                        st.image(thumbnail, width="stretch")
                 with col_info:
-                    st.markdown(f"### {title}")
                     st.markdown(
-                        f"**Channel:** {uploader}  \n"
-                        f"**Duration:** {int(duration // 60)}:{int(duration % 60):02d}  \n"
-                        f"**Type:** {'🎵 Audio (MP3)' if download_type == 'audio' else f'🎬 Video ({quality}p)' if quality else '🎬 Video (Best)'}"
+                        f'<div class="title-lg">{escape(title)}</div>'
+                        f'<div class="subtle">{escape(uploader)}</div>'
+                        f'<div class="datarow">'
+                        f'<span class="data">{timecode(duration)}</span>'
+                        f'<span class="data">{escape(target)}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True,
                     )
-                st.markdown('</div>', unsafe_allow_html=True)
 
             # ── Download ────────────────────────────────────
-            download_success = False
-            st.markdown("**Downloading…**")
+            progress_bar = job.progress(0.0, text="starting…")
+            status_text = job.empty()
 
             download_success = False
             download_error = ''
+            started_at = time.time()
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([url])
+                    result = ydl.extract_info(url, download=True)
+                for req in (result or {}).get('requested_downloads') or []:
+                    path = req.get('filepath') or req.get('_filename')
+                    if path:
+                        final_file = path
+                        break
                 download_success = True
             except Exception as e:
                 download_error = str(e)
@@ -564,29 +661,43 @@ def download_content(url: str, download_type: str = 'video', quality: int = None
                 is_bot_error = any(kw in download_error for kw in (
                     'Sign in', 'bot', 'cookies', 'confirm your age',
                 ))
-                st.error("❌ Download failed.")
-                with st.expander("🔍 Error details"):
+                stage_slot.markdown(eyebrow_html("Stopped"), unsafe_allow_html=True)
+                st.error("Download failed.")
+                with st.expander("Error details"):
                     st.code(download_error, language=None)
                 if is_bot_error:
                     st.warning(
                         "🤖 YouTube is blocking this request.\n\n"
-                        "**Fix:** Upload your `cookies.txt` in the **🍪 Cookies** section above."
+                        "**Fix:** put a `cookies.txt` file next to the app, or pick your "
+                        "browser under **⚙️ Advanced → Read cookies from browser**."
                     )
                 else:
                     st.caption("💡 Check the URL is public, or try a different video.")
                 return False
 
             # ── Locate downloaded file ──────────────────────
-            if not downloaded_file:
+            # The progress hook only sees the pre-merge / pre-transcode file, which
+            # yt-dlp deletes; the postprocessor path is the one that survives.
+            if final_file and os.path.exists(final_file):
+                downloaded_file = final_file
+
+            if not downloaded_file or not os.path.exists(downloaded_file):
                 exts = ['*.mp4', '*.webm', '*.mkv', '*.mp3', '*.m4a', '*.opus', '*.ogg', '*.flv']
+                skip = ('.part', '.ytdl', '.temp')
                 candidates = []
                 for ext in exts:
                     candidates.extend(temp_dir.glob(ext))
                 if not candidates:
                     candidates = [f for f in temp_dir.glob('*') if f.is_file()]
+                candidates = [
+                    f for f in candidates
+                    if f.is_file() and not f.name.endswith(skip)
+                    and f.stat().st_mtime >= started_at - 1
+                ]
                 if candidates:
                     latest = max(candidates, key=lambda p: p.stat().st_mtime)
                     downloaded_file = str(latest.resolve())
+                    logger.info(f"Located file via fallback scan: {downloaded_file}")
 
             if downloaded_file:
                 downloaded_file = str(Path(downloaded_file).resolve())
@@ -595,23 +706,36 @@ def download_content(url: str, download_type: str = 'video', quality: int = None
                 file_size_mb = os.path.getsize(downloaded_file) / (1024 * 1024)
                 file_name = os.path.basename(downloaded_file)
 
-                progress_bar.progress(1.0)
+                stage_slot.markdown(eyebrow_html("Downloaded"), unsafe_allow_html=True)
+                progress_bar.progress(1.0, text="Downloaded  100%")
                 status_text.empty()
 
-                st.success(f"✅ Ready! **{file_name}** ({file_size_mb:.1f} MB)")
+                if is_custom_folder:
+                    where = (f'<div class="path-chip">{escape(os.path.dirname(downloaded_file))}'
+                             f'</div>')
+                else:
+                    where = ('<div class="subtle" style="margin-top:.5rem">'
+                             'Held in a temporary folder — save it now to keep it.</div>')
+
+                st.markdown(
+                    f'<div class="result">'
+                    f'<div class="result-name">{escape(file_name)}</div>'
+                    f'<div class="datarow"><span class="data">{file_size_mb:.1f} MB</span>'
+                    f'<span class="data">{escape(Path(file_name).suffix.lstrip(".").upper())}'
+                    f'</span></div>{where}</div>',
+                    unsafe_allow_html=True,
+                )
 
                 with open(downloaded_file, 'rb') as fh:
                     file_data = fh.read()
 
                 st.download_button(
-                    label=f"⬇️  Save  {file_name}  ({file_size_mb:.1f} MB)",
+                    label="Save a copy…",
                     data=file_data,
                     file_name=file_name,
                     mime='application/octet-stream',
-                    use_container_width=True,
+                    width="stretch",
                 )
-                if is_custom_folder:
-                    st.info(f"📁 Also saved to: `{os.path.dirname(downloaded_file)}`")
                 return True
 
             if download_success:
@@ -629,6 +753,126 @@ def download_content(url: str, download_type: str = 'video', quality: int = None
         return False
 
 
+# ─────────────────────────────────────────────
+# Save location
+# ─────────────────────────────────────────────
+def common_folders():
+    """Standard destinations that exist on this machine."""
+    home = Path.home()
+    candidates = [
+        ("Downloads", home / "Downloads"),
+        ("Desktop", home / "Desktop"),
+        ("Movies", home / "Movies"),
+        ("Music", home / "Music"),
+        ("Home", home),
+    ]
+    return [(label, str(path)) for label, path in candidates if path.is_dir()]
+
+
+def pick_folder_dialog():
+    """Open the OS's native folder picker. Returns a path, or None if cancelled."""
+    import subprocess
+    import shutil
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            # `activate` pulls the dialog in front of the browser window
+            result = subprocess.run(
+                ["osascript", "-e", "activate", "-e",
+                 'POSIX path of (choose folder with prompt "Choose download folder")'],
+                capture_output=True, text=True, timeout=180,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        elif system == "Windows":
+            ps = ('Add-Type -AssemblyName System.Windows.Forms;'
+                  '$d = New-Object System.Windows.Forms.FolderBrowserDialog;'
+                  'if ($d.ShowDialog() -eq "OK") { $d.SelectedPath }')
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps],
+                capture_output=True, text=True, timeout=180,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        else:
+            for cmd in (["zenity", "--file-selection", "--directory"],
+                        ["kdialog", "--getexistingdirectory", str(Path.home())]):
+                if shutil.which(cmd[0]):
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+                    if result.returncode == 0 and result.stdout.strip():
+                        return result.stdout.strip()
+                    break
+    except Exception as e:
+        logger.warning(f"Folder picker failed: {e}")
+    return None
+
+
+def render_save_location():
+    """Save-location card. Returns the chosen folder, or None to use a temp dir."""
+    folders = common_folders()
+    paths = dict(folders)
+    CUSTOM = "Custom folder…"
+    options = [label for label, _ in folders] + [CUSTOM]
+
+    if "save_folder" not in st.session_state:
+        default = Path.home() / "Downloads"
+        st.session_state.save_folder = str(default if default.is_dir() else Path.home())
+    if "folder_choice" not in st.session_state:
+        st.session_state.folder_choice = next(
+            (lbl for lbl, path in folders if path == st.session_state.save_folder), CUSTOM
+        )
+
+    card = st.container(border=True)
+    with card:
+        eyebrow("Destination", "where files land")
+
+    col_select, col_browse = card.columns([3, 1])
+
+    # Browse is handled before the other widgets render: widget-backed session
+    # state can't be written once its widget exists this run.
+    with col_browse:
+        browse = st.button("Browse…", width="stretch",
+                           help="Open your system's folder picker")
+    if browse:
+        picked = pick_folder_dialog()
+        if picked:
+            picked = picked.rstrip(os.sep) or picked
+            st.session_state.save_folder = picked
+            st.session_state.folder_choice = next(
+                (lbl for lbl, path in folders if path == picked), CUSTOM
+            )
+            st.session_state.custom_folder = picked
+        else:
+            st.toast("No folder selected")
+
+    st.session_state.setdefault("custom_folder", st.session_state.save_folder)
+
+    with col_select:
+        choice = st.selectbox("Folder", options, key="folder_choice",
+                              label_visibility="collapsed")
+
+    if choice == CUSTOM:
+        typed = card.text_input(
+            "Folder path", key="custom_folder",
+            placeholder=str(Path.home() / "Videos"), label_visibility="collapsed",
+        )
+        if typed.strip():
+            st.session_state.save_folder = os.path.expanduser(typed.strip())
+    else:
+        st.session_state.save_folder = paths[choice]
+
+    folder = st.session_state.save_folder
+    if os.path.isdir(folder) and os.access(folder, os.W_OK):
+        card.markdown(f'<div class="path-chip">{escape(folder)}</div>',
+                      unsafe_allow_html=True)
+    else:
+        card.warning(f"{folder} isn't a writable folder. Files will go to a temp "
+                     f"folder until you pick another one.")
+        folder = None
+
+    return folder
+
+
 def main():
     st.set_page_config(
         page_title="YT Downloader",
@@ -640,177 +884,122 @@ def main():
     # Inject CSS
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-    # ── Hero banner ──────────────────────────────────────────
-    mode_label = "☁️ Cloud Mode" if IS_CLOUD_DEPLOYMENT else "💻 Local Mode"
-    st.markdown(f"""
-<div class="hero-banner">
-    <h1>🎥 YouTube Downloader</h1>
-    <p>Download videos or extract audio — fast & free</p>
-    <span class="mode-badge">{mode_label}</span>
-</div>
-""", unsafe_allow_html=True)
+    # ── Header rail: identity plus the status that used to hide in the sidebar ──
+    ffmpeg_ok = check_ffmpeg() is not None
+    try:
+        has_secret = bool(st.secrets.get("YOUTUBE_COOKIES", "").strip())
+    except Exception:
+        has_secret = False
+    has_cookies = has_secret or Path("cookies.txt").exists()
 
-    # ── Sidebar info ─────────────────────────────────────────
+    chips = [
+        ('chip-ok', 'ffmpeg ready') if ffmpeg_ok else ('chip-bad', 'ffmpeg missing'),
+        ('chip-ok', 'cookies on') if has_cookies else ('chip-warn', 'no cookies'),
+        ('chip', f'yt-dlp {yt_dlp.version.__version__}'),
+        ('chip', 'cloud' if IS_CLOUD_DEPLOYMENT else 'local'),
+    ]
+    chip_html = "".join(
+        f'<span class="chip {cls if cls != "chip" else ""}">{escape(text)}</span>'
+        for cls, text in chips
+    )
+    st.markdown(
+        f'<div class="rail"><span class="rail-mark"></span>'
+        f'<span class="rail-name">YouTube Downloader</span>'
+        f'<span class="rail-chips">{chip_html}</span></div>',
+        unsafe_allow_html=True,
+    )
+
     with st.sidebar:
-        st.markdown("## ℹ️ About")
-        st.markdown("""
-This tool lets you download YouTube videos and audio directly from your browser.
+        st.markdown("### About")
+        st.markdown(
+            "Paste a link, pick a format, choose where it lands.\n\n"
+            "Video saves as MP4, audio as 192 kbps MP3. "
+            "Long videos take a moment to merge after the download finishes."
+        )
 
-**Supported formats**
-- 🎬 MP4 Video (up to 1080p)
-- 🎵 MP3 Audio (192 kbps)
+    # ── Destination: a sticky preference, so it sits above the per-download inputs ──
+    download_folder = render_save_location() if not IS_CLOUD_DEPLOYMENT else None
 
-**Notes**
-- Large files may take a minute to process
-- In cloud mode files are temporary; save them immediately after download
-""")
-        st.markdown("---")
-        ffmpeg_ok = check_ffmpeg() is not None
-        try:
-            has_secret = bool(st.secrets.get("YOUTUBE_COOKIES", "").strip())
-        except Exception:
-            has_secret = False
-        has_local = Path("cookies.txt").exists()
-        if has_secret:
-            cookies_status = "✅ Via Streamlit secret"
-        elif has_local:
-            cookies_status = "✅ cookies.txt loaded"
-        else:
-            cookies_status = "⚠️ Not configured"
-        st.markdown(f"**FFmpeg:** {'✅ Available' if ffmpeg_ok else '❌ Not found'}")
-        st.markdown(f"**Cookies:** {cookies_status}")
-        st.markdown(f"**yt-dlp:** {yt_dlp.version.__version__}")
-        st.markdown(f"**Deployment:** {'Cloud ☁️' if IS_CLOUD_DEPLOYMENT else 'Local 💻'}")
-
-    # ── Download form ─────────────────────────────────────────
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">📥 Download Settings</div>', unsafe_allow_html=True)
-
-    with st.form("download_form", clear_on_submit=False):
+    # ── Source + output ───────────────────────────────────────
+    with st.form("download_form", clear_on_submit=False, border=True):
+        eyebrow("Source")
         youtube_url = st.text_input(
             "YouTube URL",
-            placeholder="https://www.youtube.com/watch?v=...",
+            placeholder="https://www.youtube.com/watch?v=…",
             label_visibility="collapsed",
         )
 
+        eyebrow("Output")
         col1, col2 = st.columns(2)
         with col1:
             download_type = st.selectbox(
-                "Type",
+                "Format",
                 ["video", "audio"],
-                format_func=lambda x: "🎬 Video" if x == "video" else "🎵 Audio (MP3)",
+                format_func=lambda x: "Video · MP4" if x == "video" else "Audio · MP3",
             )
         with col2:
             if download_type == "video":
-                quality_options = [None, 1080, 720, 480, 360, 240]
                 quality = st.selectbox(
                     "Quality",
-                    quality_options,
-                    format_func=lambda x: "✨ Best available" if x is None else f"{x}p",
+                    [None, 1080, 720, 480, 360, 240],
+                    format_func=lambda x: "Best available" if x is None else f"{x}p",
                 )
             else:
                 quality = None
-                st.selectbox("Quality", ["192 kbps"], disabled=True, label_visibility="visible")
+                st.markdown(
+                    '<div style="padding-top:1.85rem">'
+                    '<span class="data">192 kbps · fixed</span></div>',
+                    unsafe_allow_html=True,
+                )
 
-        # ── Cookies (cloud: always visible; local: in expander) ──
-        st.markdown("---")
-        cookies_file_upload = None
-        browser_cookies = None
-        download_folder = None
+        st.write("")
+        submitted = st.form_submit_button("Download", type="primary", width="stretch")
 
-        if IS_CLOUD_DEPLOYMENT:
-            # On cloud, cookies upload is the ONLY bypass — show it prominently
-            st.markdown(
-                "**🍪 YouTube Cookies** &nbsp; "
-                "<span style='background:#ff4444;color:#fff;border-radius:4px;"
-                "padding:2px 7px;font-size:0.75rem;font-weight:700'>REQUIRED if blocked</span>",
-                unsafe_allow_html=True,
-            )
+    # ── Cookie source: only surfaces when YouTube blocks something ──
+    browser_cookies = None
+    if IS_CLOUD_DEPLOYMENT:
+        st.caption("Cookies are configured on the server.")
+    else:
+        with st.expander("Advanced — cookie source"):
             st.caption(
-                "If you see a 'Sign in to confirm you're not a bot' error, "
-                "export your YouTube cookies from your browser and upload the file below. "
-                "Use the [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) "
-                "Chrome extension or equivalent."
+                "A cookies.txt next to the app is picked up automatically. "
+                "Reading from a signed-in browser works too, and only matters "
+                "when YouTube blocks a download."
             )
-            cookies_file_upload = st.file_uploader(
-                "Upload cookies.txt (Netscape format)",
-                type=["txt"],
-                label_visibility="collapsed",
-            )
-        else:
-            with st.expander("⚙️ Advanced Settings  *(fix bot errors / choose save folder)*"):
-                st.markdown("**🍪 Cookies** *(needed if YouTube blocks the download)*")
-                cookies_file_upload = st.file_uploader(
-                    "Upload cookies.txt",
-                    type=["txt"],
-                    help="Export from your browser with a cookie exporter extension.",
-                    label_visibility="collapsed",
+            available_browsers = get_available_browsers()
+            if available_browsers:
+                browser_choice = st.selectbox(
+                    "Read cookies from browser",
+                    ["Off"] + available_browsers,
                 )
-
-                available_browsers = get_available_browsers()
-                if available_browsers:
-                    browser_options = ["— don't use browser cookies —"] + available_browsers
-                    browser_choice = st.selectbox(
-                        "Or auto-read cookies from browser",
-                        browser_options,
-                        help="yt-dlp will read your browser's YouTube login cookies directly.",
-                    )
-                    if browser_choice != "— don't use browser cookies —":
-                        browser_cookies = browser_choice
-                else:
-                    st.caption("No supported browsers detected on this machine.")
-
-                st.markdown("**📁 Save Location**")
-                download_folder_input = st.text_input(
-                    "Folder path",
-                    placeholder="Leave blank for temp location",
-                    label_visibility="collapsed",
-                )
-                if download_folder_input.strip():
-                    p = os.path.expanduser(download_folder_input.strip())
-                    if os.path.isdir(p) and os.access(p, os.W_OK):
-                        download_folder = p
-                        st.caption(f"✅ Will save to: `{os.path.abspath(p)}`")
-                    else:
-                        st.caption("⚠️ Path not found or not writable — using temp location")
-
-        submitted = st.form_submit_button("⬇️  Download", use_container_width=True)
-
-    st.markdown('</div>', unsafe_allow_html=True)
+                if browser_choice != "Off":
+                    browser_cookies = browser_choice
+            else:
+                st.caption("No supported browsers found on this machine.")
 
     # ── Handle submission ─────────────────────────────────────
     if submitted:
         if not youtube_url.strip():
-            st.warning("⚠️ Please enter a YouTube URL.")
+            st.warning("Paste a YouTube link to start.")
         elif "youtube.com" not in youtube_url and "youtu.be" not in youtube_url:
-            st.warning("⚠️ URL does not look like a YouTube link. Please check and try again.")
+            st.warning("That doesn't look like a YouTube link. Check the URL and try again.")
         else:
-            # Save uploaded cookies file to a temp path if provided
-            cookies_file_path = None
-            if cookies_file_upload is not None:
-                cookies_tmp = Path("/tmp/yt_cookies.txt") if IS_CLOUD_DEPLOYMENT else Path("temp_cookies.txt")
-                cookies_tmp.write_bytes(cookies_file_upload.read())
-                cookies_file_path = str(cookies_tmp)
-
-            with st.spinner("Fetching video info…"):
-                success = download_content(
-                    url=youtube_url.strip(),
-                    download_type=download_type,
-                    quality=quality,
-                    download_folder=download_folder if not IS_CLOUD_DEPLOYMENT else None,
-                    cookies_file=cookies_file_path,
-                    browser_cookies=browser_cookies if not IS_CLOUD_DEPLOYMENT else None,
-                )
+            success = download_content(
+                url=youtube_url.strip(),
+                download_type=download_type,
+                quality=quality,
+                download_folder=download_folder,
+                cookies_file=None,
+                browser_cookies=browser_cookies if not IS_CLOUD_DEPLOYMENT else None,
+            )
             if success:
-                st.button("🔄 Download Another", on_click=st.rerun, use_container_width=True)
+                st.button("Download another", on_click=st.rerun, width="stretch")
 
     # ── Footer ───────────────────────────────────────────────
-    st.markdown("""
-<div class="footer">
-    Built with ❤️ using <strong>Streamlit</strong> &amp; <strong>yt-dlp</strong> &nbsp;·&nbsp;
-    For personal use only &nbsp;·&nbsp; Respect copyright laws
-</div>
-""", unsafe_allow_html=True)
+    st.markdown(
+        '<div class="footer">streamlit + yt-dlp · personal use · respect copyright</div>',
+        unsafe_allow_html=True,
+    )
 
 
 if __name__ == "__main__":
